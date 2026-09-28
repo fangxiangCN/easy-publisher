@@ -1,0 +1,38 @@
+[versions]
+kotlin = "2.1.21"
+coroutines = "1.10.2"
+okhttp = "4.12.0"
+retrofit = "2.11.0"
+moshi = "1.15.2"
+# 小米开放平台要求 RSA/NONE/PKCS1Padding，JDK 默认 provider 不支持该组合，保留 BouncyCastle。
+# 从已停止维护的 bcprov-jdk15on:1.62 迁移到 bcprov-jdk18on 最新版。
+bouncycastle = "1.86"
+apkParser = "2.6.10"
+clikt = "5.1.0"
+mcp = "0.15.0"
+shadow = "8.3.9"
+junit = "5.11.4"
+mockwebserver = "4.12.0"
+
+[libraries]
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+retrofit-moshi = { module = "com.squareup.retrofit2:converter-moshi", version.ref = "retrofit" }
+moshi = { module = "com.squareup.moshi:moshi", version.ref = "moshi" }
+moshi-kotlin = { module = "com.squareup.moshi:moshi-kotlin", version.ref = "moshi" }
+bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+apk-parser = { module = "net.dongliu:apk-parser", version.ref = "apkParser" }
+clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
+mcp-kotlin = { module = "io.modelcontextprotocol:kotlin-sdk-jvm", version.ref = "mcp" }
+
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "1.11.4" }
+mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "mockwebserver" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }

@@ -1,0 +1,29 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+local.properties
+
+### 凭据 / 密钥（绝不提交）###
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*secret*
+*credential*
+**/apps/*.json
+
+### IDE ###
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+### OS ###
+.DS_Store
+Thumbs.db
