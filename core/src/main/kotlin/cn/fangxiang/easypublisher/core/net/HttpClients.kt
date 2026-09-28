@@ -67,12 +67,18 @@ object HttpClients {
         if (!url.isHttps) {
             throw cn.fangxiang.easypublisher.core.PublishError.protocol(
                 channel = channel,
-                message = "渠道返回的上传地址不是 https，已拒绝上传：${url.redact()}",
+                message = "渠道返回的上传地址不是 https，已拒绝上传：${url.withoutQuery()}",
             )
         }
         return url
     }
 
-    /** 隐去 query，避免把签名参数写进日志 */
-    private fun HttpUrl.redact(): String = "$scheme://$host$encodedPath"
+    /**
+     * 隐去 query，避免把签名参数写进日志。
+     *
+     * 不能叫 `redact()`：OkHttp 的 [HttpUrl] 自带一个同名 public 成员
+     * （`https://api.example.com/...`），成员永远优先于扩展函数，
+     * 结果是路径被一并抹掉、连是哪个接口都看不出来。
+     */
+    private fun HttpUrl.withoutQuery(): String = "$scheme://$host$encodedPath"
 }
