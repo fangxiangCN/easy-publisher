@@ -8,6 +8,8 @@ import cn.fangxiang.easypublisher.core.channel.ChannelRegistry
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
 import cn.fangxiang.easypublisher.core.channel.MarketQuery
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
 import cn.fangxiang.easypublisher.core.channel.UploadRequest
 import cn.fangxiang.easypublisher.core.config.AppConfig
 import cn.fangxiang.easypublisher.core.config.AppConfigStore
@@ -37,6 +39,16 @@ import java.util.concurrent.ConcurrentHashMap
 class PublishService(
     private val configStore: AppConfigStore = AppConfigStore(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob()),
+    /**
+     * 可用渠道。默认取注册表，测试可注入替身 —— 否则 service 层的编排逻辑
+     * （阶段记录、失败隔离、前置校验时机）完全无法覆盖。
+     */
+    private val channels: List<Channel> = ChannelRegistry.all(),
+    /**
+     * APK 元信息读取。默认走 apk-parser，测试可注入替身 ——
+     * 否则编排逻辑的测试必须先准备一个真实可解析的 APK。
+     */
+    private val apkInfoReader: suspend (File) -> ApkInfo = ::readApkInfo,
 ) {
 
     private val jobs = ConcurrentHashMap<String, JobHandle>()
@@ -64,7 +76,7 @@ class PublishService(
 
     suspend fun app(applicationId: String): AppConfig = configStore.require(applicationId)
 
-    fun channels(): List<Channel> = ChannelRegistry.all()
+    fun channels(): List<Channel> = channels
 
     /**
      * 查询应用在各渠道的状态。
@@ -107,6 +119,7 @@ class PublishService(
         channelIds: List<String>? = null,
         versionRule: PublishPolicy.VersionRule = PublishPolicy.VersionRule.Strict,
         timeouts: HttpTimeouts = HttpTimeouts.DEFAULT,
+        stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
     ): String {
         val config = configStore.require(applicationId)
         val targets = resolveChannels(config, channelIds)
@@ -114,11 +127,18 @@ class PublishService(
             throw PublishError.configuration("没有启用任何渠道：$applicationId")
         }
 
+        // 停留点是否被支持，必须在做任何实际工作之前判定。
+        // 否则小米这类「无处可停」的渠道会先解析 APK、查完市场状态，
+        // 甚至开始上传，才告诉调用方这个请求根本不成立。
+        if (stopAfter != ReleaseStage.SubmitReview) {
+            targets.forEach { it.requireSupportedStage(stopAfter) }
+        }
+
         // 预解析：任何一个渠道的 APK 缺失或配置错误都应在返回 jobId 之前暴露，
         // 而不是留到后台执行时才失败 —— 否则调用方只能从轮询结果里发现参数写错了。
         val plans = targets.map { channel ->
             val file = ApkLocator.locate(apkPath, channel, config.multiChannelApk)
-            ChannelPlan(channel, file, readApkInfo(file), credentialsFor(config, channel))
+            ChannelPlan(channel, file, apkInfoReader(file), credentialsFor(config, channel))
         }
 
         val reference = plans.first().apkInfo
@@ -138,13 +158,14 @@ class PublishService(
                 channels = plans.map {
                     ChannelProgress(it.channel.id, it.channel.displayName, ChannelStage.Waiting)
                 },
+                requestedStage = stopAfter,
                 startedAt = System.currentTimeMillis(),
             )
         )
         jobs[handle.snapshot.id] = handle
 
         handle.job = scope.launch {
-            runUpload(handle, plans, releaseParams, versionRule, timeouts)
+            runUpload(handle, plans, releaseParams, versionRule, timeouts, stopAfter)
         }
         return handle.snapshot.id
     }
@@ -172,10 +193,11 @@ class PublishService(
         releaseParams: ReleaseParams,
         versionRule: PublishPolicy.VersionRule,
         timeouts: HttpTimeouts,
+        stopAfter: ReleaseStage,
     ) {
         supervisorScope {
             plans.map { plan ->
-                async { uploadOne(handle, plan, releaseParams, versionRule, timeouts) }
+                async { uploadOne(handle, plan, releaseParams, versionRule, timeouts, stopAfter) }
             }.awaitAll()
         }
     }
@@ -186,20 +208,25 @@ class PublishService(
         releaseParams: ReleaseParams,
         versionRule: PublishPolicy.VersionRule,
         timeouts: HttpTimeouts,
+        stopAfter: ReleaseStage,
     ) {
         val channel = plan.channel
         try {
-            handle.update(channel.id, ChannelStage.Working("检查渠道状态"))
-            val marketInfo = runCatching {
-                channel.queryMarket(
-                    MarketQuery(plan.apkInfo.applicationId, plan.credentials, timeouts)
-                )
-            }.getOrNull()
+            // 只上传安装包时不做版本号校验：此时不产生任何版本，
+            // 拦截只会妨碍「验证凭据与签名是否可用」这个用途
+            if (stopAfter != ReleaseStage.UploadArtifact) {
+                handle.update(channel.id, ChannelStage.Working("检查渠道状态"))
+                val marketInfo = runCatching {
+                    channel.queryMarket(
+                        MarketQuery(plan.apkInfo.applicationId, plan.credentials, timeouts)
+                    )
+                }.getOrNull()
 
-            PublishPolicy.reject(plan.apkInfo, marketInfo, versionRule)?.let { throw it }
+                PublishPolicy.reject(plan.apkInfo, marketInfo, versionRule)?.let { throw it }
+            }
 
             handle.update(channel.id, ChannelStage.Working("请求中"))
-            channel.upload(
+            val reached = channel.upload(
                 UploadRequest(
                     apkFile = plan.apkFile,
                     apkInfo = plan.apkInfo,
@@ -209,10 +236,12 @@ class PublishService(
                     onProgress = { fraction ->
                         handle.update(channel.id, ChannelStage.Uploading(fraction))
                     },
+                    stopAfter = stopAfter,
                 )
             )
-            handle.update(channel.id, ChannelStage.Succeeded)
-            AppLogger.info(channel.displayName, "提交新版本成功：${plan.apkInfo}")
+            // 以渠道返回的实际阶段为准，不假设请求里的 stopAfter 已达成
+            handle.update(channel.id, ChannelStage.Succeeded(reached))
+            AppLogger.info(channel.displayName, "${reached.label} 完成：${plan.apkInfo}")
         } catch (e: CancellationException) {
             // 取消必须原样向上传播，否则协程框架无法感知。
             // 原实现用 catch(Throwable) 把取消当成失败，界面显示「上传失败」并给出重试按钮，
@@ -231,10 +260,15 @@ class PublishService(
 
     private fun resolveChannels(config: AppConfig, channelIds: List<String>?): List<Channel> {
         if (channelIds.isNullOrEmpty()) {
-            return config.enabledChannels().mapNotNull { ChannelRegistry.find(it.name) }
+            return config.enabledChannels().mapNotNull { enabled ->
+                channels.firstOrNull { it.id.equals(enabled.name, ignoreCase = true) }
+            }
         }
         return channelIds.map { id ->
-            val channel = ChannelRegistry.require(id)
+            val channel = channels.firstOrNull { it.id.equals(id, ignoreCase = true) }
+                ?: throw PublishError.configuration(
+                    "未知渠道：$id（可用渠道：${channels.joinToString(", ") { it.id }}）"
+                )
             if (config.channel(channel.id) == null) {
                 throw PublishError.configuration(
                     "应用 ${config.applicationId} 未配置渠道 ${channel.id}",

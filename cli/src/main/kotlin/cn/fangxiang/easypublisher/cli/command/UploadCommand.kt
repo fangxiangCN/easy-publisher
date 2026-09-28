@@ -6,6 +6,7 @@ import cn.fangxiang.easypublisher.cli.renderTable
 import cn.fangxiang.easypublisher.core.ApplicationId
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
 import cn.fangxiang.easypublisher.core.service.ChannelStage
 import cn.fangxiang.easypublisher.core.service.JobState
@@ -14,6 +15,7 @@ import cn.fangxiang.easypublisher.core.service.UploadJob
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
+import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
@@ -62,6 +64,13 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
         help = "跳过全部版本号校验，仅用于排查问题",
     ).flag()
 
+    private val stopAfter by option(
+        "--stop-after",
+        help = "流程走到哪一步就停下：artifact=仅上传安装包（不创建版本）、" +
+            "draft=停在草稿态（可先到渠道后台核对再送审）、submit=一路走到送审（默认）。" +
+            "并非所有渠道都支持中途停下，小米的 dev/push 是原子的，只能 submit",
+    ).choice("artifact", "draft", "submit")
+
     private val timeout by option("--timeout", help = "单次请求超时秒数，默认 120").long()
 
     private val detach by option("--detach", help = "立即返回任务 id，不等待完成").flag()
@@ -85,6 +94,11 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
             channelIds = channels,
             versionRule = rule,
             timeouts = timeout?.let { HttpTimeouts.ofSeconds(it) } ?: HttpTimeouts.DEFAULT,
+            stopAfter = when (stopAfter) {
+                "artifact" -> ReleaseStage.UploadArtifact
+                "draft" -> ReleaseStage.CreateDraft
+                else -> ReleaseStage.SubmitReview
+            },
         )
 
         if (detach) {

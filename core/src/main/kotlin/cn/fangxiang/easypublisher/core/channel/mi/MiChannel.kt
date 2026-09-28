@@ -1,5 +1,10 @@
 package cn.fangxiang.easypublisher.core.channel.mi
 
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
+import cn.fangxiang.easypublisher.core.channel.ChannelCapability
+import cn.fangxiang.easypublisher.core.channel.Evidence
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.Withdrawal
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelCredentials
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
@@ -24,6 +29,16 @@ class MiChannel : Channel {
     /** 沿用原项目的多渠道包文件名标识 */
     override val fileNameTag: String = "MI"
 
+    override val capability: ChannelCapability = ChannelCapability(
+        // dev/push 是原子的，没有任何可停下的中间位置
+        supportedStages = listOf(ReleaseStage.SubmitReview),
+        riskLevel = ChannelCapability.RiskLevel.Critical,
+        withdrawal = Withdrawal.NotVerified,
+        evidence = Evidence.CodeObservation,
+        note = "dev/push 把「上传安装包」与「提交审核」合并为一次请求，中间无处可停 —— " +
+            "一旦调用即送审，无法先建草稿确认。",
+    )
+
     override val params: List<ChannelParam> = listOf(
         ChannelParam(
             name = KEY_ACCOUNT,
@@ -43,7 +58,10 @@ class MiChannel : Channel {
 
     private val api = MiMarketApi()
 
-    override suspend fun upload(request: UploadRequest) {
+    override suspend fun upload(request: UploadRequest): ReleaseStage {
+        // 小米的 dev/push 把上传与送审合并成一次原子请求，没有可停下的中间位置。
+        // 这里必须显式报错：若默默继续走到送审，调用方会以为停在了草稿态。
+        requireSupportedStage(request.stopAfter)
         val account = request.credentials[KEY_ACCOUNT]
         val certificate = request.credentials[KEY_PUBLIC_KEY]
         val password = request.credentials[KEY_PRIVATE_KEY]
@@ -74,6 +92,7 @@ class MiChannel : Channel {
             progressChange = request.onProgress,
         )
         AppLogger.info(LOG_TAG, "提交成功：$packageName")
+        return ReleaseStage.SubmitReview
     }
 
     override suspend fun queryMarket(query: MarketQuery): MarketInfo {

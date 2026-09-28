@@ -5,6 +5,7 @@ import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
 import cn.fangxiang.easypublisher.core.channel.ChannelRegistry
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.config.EnvCredentialStore
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
 import cn.fangxiang.easypublisher.core.readApkInfo
@@ -99,6 +100,27 @@ private fun Server.registerListChannels() = addTool(
                                 put("id", channel.id)
                                 put("displayName", channel.displayName)
                                 put("fileNameTag", channel.fileNameTag)
+                                putJsonObject("capability") {
+                                    val cap = channel.capability
+                                    put("riskLevel", cap.riskLevel.name)
+                                    put("riskLevelLabel", cap.riskLevel.label)
+                                    put("withdrawal", cap.withdrawal.name)
+                                    put("withdrawalLabel", cap.withdrawal.label)
+                                    put(
+                                        "requiresExplicitConfirmation",
+                                        cap.requiresExplicitConfirmation,
+                                    )
+                                    put(
+                                        "automaticRetryAfterSubmission",
+                                        cap.automaticRetryAfterSubmission,
+                                    )
+                                    put("evidence", cap.evidence.name)
+                                    put("evidenceLabel", cap.evidence.label)
+                                    put("note", cap.note)
+                                    putJsonArray("supportedStages") {
+                                        cap.supportedStages.forEach { add(it.name) }
+                                    }
+                                }
                                 putJsonArray("params") {
                                     channel.params.forEach { param ->
                                         add(
@@ -305,8 +327,18 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
         "applicationId" to Schema.string("包名"),
         "apkPath" to Schema.string("APK 文件路径，或存放多渠道包的目录"),
         "updateDesc" to Schema.string("更新说明，会提交给商店审核"),
+        "stopAfter" to Schema.string(
+            "流程走到哪一步就停下。artifact=仅上传安装包，不创建任何版本，" +
+                "可用于验证凭据与签名是否可用；draft=停在草稿态，可先到渠道后台核对再送审；" +
+                "submit=一路走到送审（默认）。注意：并非所有渠道都支持中途停下，" +
+                "小米的 dev/push 是原子请求只能 submit，OPPO/vivo 没有草稿态只支持 artifact 或 submit。" +
+                "调用前请先看 list_channels 返回的 capability.supportedStages",
+            enum = listOf("artifact", "draft", "submit"),
+        ),
         "confirm" to Schema.boolean(
-            "必须为 true。确认理解此操作不可撤销，将向正式渠道提交版本",
+            "当 stopAfter 为 submit（或未指定）时必须为 true。" +
+                "确认理解送审不可撤销，将向正式渠道提交版本。" +
+                "停在 artifact 或 draft 时不需要此参数",
             default = false,
         ),
         "channels" to Schema.stringArray("只发指定渠道；省略则发全部已启用渠道"),
@@ -316,7 +348,10 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
             default = false,
         ),
         "timeoutSeconds" to Schema.integer("单次请求超时秒数，默认 120"),
-        required = listOf("applicationId", "apkPath", "updateDesc", "confirm"),
+        // confirm 不放进 required：它只在真的要送审时才必需，
+        // 停在 artifact/draft 是安全操作，不该被同一个门槛拦住。
+        // JSON Schema 表达不了这种条件依赖，改在代码里校验并给出明确原因。
+        required = listOf("applicationId", "apkPath", "updateDesc"),
     ),
     toolAnnotations = ToolAnnotations(
         readOnlyHint = false,
@@ -326,10 +361,21 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
     ),
 ) { request ->
     guarded {
-        if (request.boolean("confirm") != true) {
+        val stage = when (request.string("stopAfter")) {
+            "artifact" -> ReleaseStage.UploadArtifact
+            "draft" -> ReleaseStage.CreateDraft
+            null, "submit" -> ReleaseStage.SubmitReview
+            else -> throw PublishError.configuration(
+                "stopAfter 只能是 artifact / draft / submit"
+            )
+        }
+        // 只有真的要送审时才要求确认。停在送审之前不产生不可撤销的副作用，
+        // 强行要求 confirm 只会训练调用方无脑传 true，反而削弱这道门槛的意义。
+        if (stage == ReleaseStage.SubmitReview && request.boolean("confirm") != true) {
             throw PublishError.configuration(
-                "upload_apk 需要显式传 confirm=true。此操作会向应用商店提交正式版本，" +
-                    "且各商店均不提供撤销 API。建议先用 check_release 预检。"
+                "送审需要显式传 confirm=true。此操作会向应用商店提交正式版本，" +
+                    "且各商店均不提供撤销 API。建议先用 check_release 预检；" +
+                    "若只想验证流程是否走得通，可传 stopAfter=artifact 或 draft"
             )
         }
         val applicationId = request.requireString("applicationId").let(ApplicationId::validate)
@@ -347,6 +393,7 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
                 PublishPolicy.VersionRule.Strict
             },
             timeouts = request.timeouts(),
+            stopAfter = stage,
         )
         val job = service.job(jobId)
         toolResult(
@@ -357,7 +404,16 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
                 putJsonArray("channels") {
                     job?.channels?.forEach { add(it.channelId) }
                 }
-                put("note", "用 get_upload_status 轮询进度。上传大包可能需要数分钟到数十分钟。")
+                put("requestedStage", stage.name)
+                put(
+                    "note",
+                    if (stage == ReleaseStage.SubmitReview) {
+                        "用 get_upload_status 轮询进度。上传大包可能需要数分钟到数十分钟。"
+                    } else {
+                        "已请求停在「${stage.label}」。用 get_upload_status 轮询；" +
+                            "完成后各渠道的 state 会显示实际到达的阶段。"
+                    },
+                )
             }
         )
     }
@@ -390,6 +446,7 @@ private fun Server.registerGetUploadStatus(service: PublishService) = addTool(
                 put("applicationId", job.applicationId)
                 put("versionCode", job.versionCode)
                 put("versionName", job.versionName)
+                put("requestedStage", job.requestedStage.name)
                 putJsonArray("channels") {
                     job.channels.forEach { progress ->
                         add(
@@ -397,6 +454,10 @@ private fun Server.registerGetUploadStatus(service: PublishService) = addTool(
                                 put("id", progress.channelId)
                                 put("displayName", progress.displayName)
                                 put("stage", progress.stage::class.simpleName ?: "Unknown")
+                                (progress.stage as? ChannelStage.Succeeded)?.let {
+                                    put("reachedStage", it.reached.name)
+                                    put("reachedStageLabel", it.reached.label)
+                                }
                                 put("message", progress.stage.label)
                                 (progress.stage as? ChannelStage.Failed)?.let { failed ->
                                     put("kind", failed.kind.name)

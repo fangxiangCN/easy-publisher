@@ -3,6 +3,7 @@ package cn.fangxiang.easypublisher.core.service
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.FailurePhase
 import cn.fangxiang.easypublisher.core.PublishError
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 
 /** 单个渠道的提交阶段 */
 sealed interface ChannelStage {
@@ -15,7 +16,15 @@ sealed interface ChannelStage {
     /** 上传中，[fraction] 取值 [0f, 1f] */
     data class Uploading(val fraction: Float) : ChannelStage
 
-    data object Succeeded : ChannelStage
+    /**
+     * 流程正常结束。
+     *
+     * [reached] 记录实际到达的阶段 —— 停在草稿态时不能显示「已提交」，
+     * 那会让使用者以为版本已经送审。
+     */
+    data class Succeeded(
+        val reached: ReleaseStage = ReleaseStage.SubmitReview,
+    ) : ChannelStage
 
     data class Failed(
         val kind: ErrorKind,
@@ -47,7 +56,11 @@ sealed interface ChannelStage {
             is Waiting -> "等待中"
             is Working -> action
             is Uploading -> "上传中 ${(fraction * 100).toInt()}%"
-            is Succeeded -> "已提交"
+            is Succeeded -> when (reached) {
+                ReleaseStage.UploadArtifact -> "已上传安装包（未创建版本）"
+                ReleaseStage.CreateDraft -> "草稿已就绪（未送审）"
+                ReleaseStage.SubmitReview -> "已提交审核"
+            }
             is Failed -> summary
             is Cancelled -> "已取消"
         }
@@ -88,6 +101,8 @@ data class UploadJob(
     val versionCode: Long,
     val versionName: String,
     val channels: List<ChannelProgress>,
+    /** 本次请求希望停在哪一步。实际到达的阶段见各渠道的 [ChannelStage.Succeeded] */
+    val requestedStage: ReleaseStage = ReleaseStage.SubmitReview,
     val startedAt: Long,
     val finishedAt: Long? = null,
 ) {

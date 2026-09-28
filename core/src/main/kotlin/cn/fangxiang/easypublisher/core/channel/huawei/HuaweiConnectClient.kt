@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.huawei
 
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.ApkInfo
 import cn.fangxiang.easypublisher.core.ErrorKind
@@ -50,17 +51,35 @@ internal class HuaweiConnectClient(private val channelId: String) {
         releaseParams: ReleaseParams,
         timeouts: HttpTimeouts,
         progressChange: ProgressChange,
-    ) {
+        stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
+    ): ReleaseStage {
         val client = HttpClients.of(timeouts)
         val api = huaweiConnectApi(client)
         val token = "Bearer ${getToken(api, clientId, clientSecret)}"
         val appId = getAppId(api, clientId, token, apkInfo.applicationId)
         val uploadUrl = getUploadUrl(api, clientId, token, appId, file)
         uploadFile(client, file, uploadUrl, progressChange)
+        if (stopAfter == ReleaseStage.UploadArtifact) {
+            // 文件已在华为的对象存储里，但尚未绑定到应用，不产生任何版本
+            AppLogger.info(LOG_TAG, "已按请求停在「仅上传安装包」：未绑定文件、未创建版本")
+            return ReleaseStage.UploadArtifact
+        }
         val pkgId = bindApk(api, clientId, token, appId, file, uploadUrl)
         waitApkReady(api, clientId, token, appId, pkgId)
         modifyUpdateDesc(api, clientId, token, appId, releaseParams.updateDesc)
+        if (stopAfter == ReleaseStage.CreateDraft) {
+            // 此时草稿已完整：文件已绑定、编译检查已通过、更新描述已写入。
+            // 停在这里的价值是让人先到 AppGallery Connect 后台核对，再决定是否送审 ——
+            // 送审不可撤销，而草稿可以随时改。
+            AppLogger.info(
+                LOG_TAG,
+                "草稿已就绪（文件已绑定并通过编译检查），未送审。" +
+                    "可到 AppGallery Connect 后台核对后再执行送审",
+            )
+            return ReleaseStage.CreateDraft
+        }
         submit(api, clientId, token, appId, releaseParams.onlineTime)
+        return ReleaseStage.SubmitReview
     }
 
     /**

@@ -65,6 +65,16 @@ data class UploadRequest(
     val releaseParams: ReleaseParams,
     val timeouts: HttpTimeouts = HttpTimeouts.DEFAULT,
     val onProgress: ProgressChange = {},
+    /**
+     * 流程走到哪一步就停下。默认一路走到送审。
+     *
+     * 设为 [ReleaseStage.UploadArtifact] 可以只验证凭据、签名与文件是否被渠道接受，
+     * 而不产生任何版本；设为 [ReleaseStage.CreateDraft] 则停在草稿态，
+     * 便于先到渠道后台人工确认再送审。
+     *
+     * 并非所有渠道都支持中途停下 —— 见 [Channel.capability]。
+     */
+    val stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
 )
 
 data class MarketQuery(
@@ -92,8 +102,23 @@ interface Channel {
     /** 本渠道需要的参数 */
     val params: List<ChannelParam>
 
-    /** 上传并提交新版本。抛出 [cn.fangxiang.easypublisher.core.PublishError] 表示失败 */
-    suspend fun upload(request: UploadRequest)
+    /**
+     * 发布能力与风险画像。
+     *
+     * 调用方应当在动手之前读它：各渠道的 API 粒度差别很大，小米的 `dev/push`
+     * 把上传与送审合并成一次请求、中间无处可停，而华为可以先建草稿再送审。
+     * 用统一的「upload」掩盖这个差异，会让人误以为所有渠道都有反悔的机会。
+     */
+    val capability: ChannelCapability
+
+    /**
+     * 上传，并按 [UploadRequest.stopAfter] 决定是否送审。
+     *
+     * @return 实际到达的阶段。调用方必须以此为准，而不是假设请求里的 stopAfter 已达成 ——
+     *         渠道可能因为 API 粒度限制而无法停在指定位置。
+     * @throws cn.fangxiang.easypublisher.core.PublishError 失败时抛出
+     */
+    suspend fun upload(request: UploadRequest): ReleaseStage
 
     /** 查询应用在该渠道的状态 */
     suspend fun queryMarket(query: MarketQuery): MarketInfo

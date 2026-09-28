@@ -1,5 +1,10 @@
 package cn.fangxiang.easypublisher.core.channel.honor
 
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
+import cn.fangxiang.easypublisher.core.channel.ChannelCapability
+import cn.fangxiang.easypublisher.core.channel.Evidence
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.Withdrawal
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
@@ -20,20 +25,35 @@ class HonorChannel : Channel {
 
     override val fileNameTag: String = "HONOR"
 
+    override val capability: ChannelCapability = ChannelCapability(
+        supportedStages = listOf(
+            ReleaseStage.UploadArtifact,
+            ReleaseStage.CreateDraft,
+            ReleaseStage.SubmitReview,
+        ),
+        riskLevel = ChannelCapability.RiskLevel.High,
+        withdrawal = Withdrawal.NotVerified,
+        evidence = Evidence.CodeObservation,
+        note = "上传与送审分离：绑定文件并更新版本描述后即形成草稿，可在荣耀开发者后台" +
+            "确认后再送审。releaseType=1 审核通过后立即发布，2 为定时发布。",
+    )
+
     override val params: List<ChannelParam> = listOf(
         ChannelParam(name = CLIENT_ID, description = "客户端ID"),
         ChannelParam(name = CLIENT_SECRET, description = "秘钥"),
     )
 
-    override suspend fun upload(request: UploadRequest) {
+    override suspend fun upload(request: UploadRequest): ReleaseStage {
+        requireSupportedStage(request.stopAfter)
         val client = HonorConnectClient(request.timeouts)
-        client.uploadApk(
+        return client.uploadApk(
             file = request.apkFile,
             apkInfo = request.apkInfo,
             clientId = request.credentials[CLIENT_ID],
             clientSecret = request.credentials[CLIENT_SECRET],
             releaseParams = request.releaseParams,
             progressChange = request.onProgress,
+            stopAfter = request.stopAfter,
         )
     }
 

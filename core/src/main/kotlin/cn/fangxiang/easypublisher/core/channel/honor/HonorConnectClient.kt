@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.honor
 
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.ApkInfo
 import cn.fangxiang.easypublisher.core.PublishError
@@ -56,17 +57,31 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
         clientSecret: String,
         releaseParams: ReleaseParams,
         progressChange: ProgressChange,
-    ) {
+        stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
+    ): ReleaseStage {
         AppLogger.info(LOG_TAG, "开始提交新版本：${apkInfo.applicationId} ${apkInfo.versionName}")
         val token = bearerToken(clientId, clientSecret)
         val appId = getAppId(token, apkInfo.applicationId)
         val languageInfo = getLanguageInfo(token, appId)
         val uploadUrl = getUploadUrl(token, appId, file)
         uploadFile(file, token, uploadUrl, progressChange)
+        if (stopAfter == ReleaseStage.UploadArtifact) {
+            AppLogger.info(LOG_TAG, "已按请求停在「仅上传安装包」：未绑定文件、未创建版本")
+            return ReleaseStage.UploadArtifact
+        }
         bindUploadedApk(token, appId, uploadUrl)
         modifyUpdateDesc(token, appId, releaseParams.updateDesc, languageInfo)
+        if (stopAfter == ReleaseStage.CreateDraft) {
+            AppLogger.info(
+                LOG_TAG,
+                "草稿已就绪（文件已绑定、更新描述已写入），未送审。" +
+                    "可到荣耀开发者后台核对后再执行送审",
+            )
+            return ReleaseStage.CreateDraft
+        }
         submit(token, appId, releaseParams.onlineTime)
         AppLogger.info(LOG_TAG, "新版本已提交审核：${apkInfo.applicationId}")
+        return ReleaseStage.SubmitReview
     }
 
     /** 查询审核状态 */

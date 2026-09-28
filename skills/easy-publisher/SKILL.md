@@ -17,6 +17,39 @@ description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五�
 - 不确定时先问用户，不要自己决定发版时机。
 - 用户没有明确说"发版"或"上传"时，不要调用 `upload`。
 
+## 各渠道能停在哪儿
+
+**发版前先搞清楚这个。** 各商店 API 粒度差别很大：
+
+| 渠道 | 可停在 | 风险 |
+|---|---|---|
+| 华为 / 荣耀 | `artifact` / `draft` / `submit` | 高 |
+| OPPO / vivo | `artifact` / `submit`（无草稿态） | 极高 |
+| 小米 | 仅 `submit`（`dev/push` 是原子请求） | 极高 |
+
+`--stop-after` 三档：
+
+- `artifact` —— 只把安装包传上去，**不创建任何版本**。用来验证凭据、签名与文件
+  是否被渠道接受，比真发一版安全得多。
+- `draft` —— 停在草稿态（仅华为、荣耀支持）。可以登录后台人工核对无误后再送审。
+- `submit` —— 一路走到送审（默认）。
+
+请求某渠道不支持的停留点会**立即报错**，不会默默走到送审。
+
+## 首次使用某个渠道时
+
+按这个顺序验证，每一步都比上一步风险高：
+
+```bash
+easy-publisher status --app <包名> --channel <渠道>          # 只读，验证鉴权链路
+easy-publisher upload --app <包名> --apk <包> --desc x --stop-after artifact   # 验证文件被接受
+easy-publisher upload --app <包名> --apk <包> --desc x --stop-after draft      # 若支持草稿
+easy-publisher upload --app <包名> --apk <包> --desc x       # 真发版
+```
+
+第一步就能验证凭据、签名算法、响应解析三环是否都通 —— 这三样是发版能否成功的
+全部前提，而它不产生任何副作用。
+
 ## 凭据
 
 凭据由工具自己从 `~/.easy-publisher/apps/<包名>.json`（权限 600）或环境变量
@@ -122,7 +155,8 @@ easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修�
 2. `status --app <包名> --json` 看各渠道状态。如果有渠道在审核中，告知用户并问是否跳过该渠道。
 3. 确认 APK 路径。用户没给就问，不要猜。
 4. 复述一遍将要执行的操作（哪个包、什么版本、发到哪些渠道），**得到用户确认后**再执行。
-5. 执行 `upload`，后台跑，轮询结果。
+5. 执行 `upload`，后台跑，轮询结果。若目标渠道支持草稿（华为、荣耀）且用户对这次
+   发版没有十足把握，建议先 `--stop-after draft`，让用户到后台核对后再送审。
 6. 汇报每个渠道的结果。部分失败时说清楚哪些成功了哪些没有 —— 成功的那些已经提交了，无法撤回。
 7. 如果有渠道失败且 `phase` 是 `AtOrAfterSubmission`，**明确告诉用户不要重试**，
    并给出需要去哪个商店后台确认。不要自作主张重跑 upload。

@@ -1,5 +1,10 @@
 package cn.fangxiang.easypublisher.core.channel.vivo
 
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
+import cn.fangxiang.easypublisher.core.channel.ChannelCapability
+import cn.fangxiang.easypublisher.core.channel.Evidence
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.Withdrawal
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelCredentials
@@ -27,6 +32,16 @@ class VivoChannel : Channel {
 
     override val fileNameTag: String = "VIVO"
 
+    override val capability: ChannelCapability = ChannelCapability(
+        supportedStages = listOf(ReleaseStage.UploadArtifact, ReleaseStage.SubmitReview),
+        riskLevel = ChannelCapability.RiskLevel.Critical,
+        withdrawal = Withdrawal.NotVerified,
+        evidence = Evidence.CodeObservation,
+        note = "app.sync.update.app 一次完成版本更新与送审，没有草稿态。" +
+            "onlineType=1 审核通过后立即上架，2 为定时上架。" +
+            "签名参数全部走 query（router/rest 网关的强制要求）。",
+    )
+
     override val params: List<ChannelParam> = listOf(
         ChannelParam(
             name = ACCESS_KEY,
@@ -38,7 +53,8 @@ class VivoChannel : Channel {
         ),
     )
 
-    override suspend fun upload(request: UploadRequest) {
+    override suspend fun upload(request: UploadRequest): ReleaseStage {
+        requireSupportedStage(request.stopAfter)
         val api = api(request.credentials, request.timeouts)
         val packageName = request.apkInfo.applicationId
 
@@ -54,7 +70,16 @@ class VivoChannel : Channel {
         val uploadResult = step("上传 APK") {
             api.uploadApk(request.apkFile, packageName, request.onProgress)
         }
+        if (request.stopAfter == ReleaseStage.UploadArtifact) {
+            // vivo 同样没有草稿态：停在这里只证明文件与签名被接受
+            AppLogger.info(
+                LOG_TAG,
+                "已按请求停在「仅上传安装包」：文件已被 vivo 接受，未提交版本",
+            )
+            return ReleaseStage.UploadArtifact
+        }
         step("提交更新") { api.submit(uploadResult, request.releaseParams) }
+        return ReleaseStage.SubmitReview
     }
 
     override suspend fun queryMarket(query: MarketQuery): MarketInfo {

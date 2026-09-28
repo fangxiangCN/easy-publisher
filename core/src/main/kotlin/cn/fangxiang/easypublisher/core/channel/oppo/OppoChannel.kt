@@ -1,5 +1,10 @@
 package cn.fangxiang.easypublisher.core.channel.oppo
 
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
+import cn.fangxiang.easypublisher.core.channel.ChannelCapability
+import cn.fangxiang.easypublisher.core.channel.Evidence
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.Withdrawal
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelCredentials
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
@@ -29,6 +34,17 @@ class OppoChannel : Channel {
 
     override val fileNameTag: String = "OPPO"
 
+    override val capability: ChannelCapability = ChannelCapability(
+        // 文件上传可单独执行，但不会生成可检视的草稿版本
+        supportedStages = listOf(ReleaseStage.UploadArtifact, ReleaseStage.SubmitReview),
+        riskLevel = ChannelCapability.RiskLevel.Critical,
+        withdrawal = Withdrawal.NotVerified,
+        evidence = Evidence.CodeObservation,
+        note = "app/upd 是全量更新语义：必须把从 app/info 读回的图标、截图、介绍、分类、" +
+            "软著等字段原样回传，漏任何一个会被清空或被拒。没有草稿态可检视；" +
+            "单独上传安装包只能验证凭据与文件是否被接受。",
+    )
+
     override val params: List<ChannelParam> = listOf(
         ChannelParam(
             name = CLIENT_ID,
@@ -40,20 +56,31 @@ class OppoChannel : Channel {
         ),
     )
 
-    override suspend fun upload(request: UploadRequest) {
+    override suspend fun upload(request: UploadRequest): ReleaseStage {
+        requireSupportedStage(request.stopAfter)
         val api = request.credentials.api(request.timeouts)
-        oppoCall {
+        return oppoCall {
             val token = api.getToken()
             // 提交版本要求全量字段，必须先把商店里现有的资料读回来，见 OppoMarketApi.submit
             val appInfo = api.getAppInfo(token, request.apkInfo.applicationId)
             val target = api.getUploadUrl(token)
             val apkResult = api.uploadApk(target, token, request.apkFile, request.onProgress)
+            if (request.stopAfter == ReleaseStage.UploadArtifact) {
+                // OPPO 没有草稿态，停在这里只能证明凭据、签名与文件被接受，
+                // 不会在后台留下任何可查看的版本
+                AppLogger.info(
+                    LOG_TAG,
+                    "已按请求停在「仅上传安装包」：文件已被 OPPO 接受，未提交版本",
+                )
+                return@oppoCall ReleaseStage.UploadArtifact
+            }
             api.submit(token, request.apkInfo, appInfo, request.releaseParams, apkResult)
             AppLogger.info(
                 LOG_TAG,
                 "已提交新版本：${request.apkInfo.applicationId} ${request.apkInfo.versionName}" +
                     "(${request.apkInfo.versionCode})",
             )
+            ReleaseStage.SubmitReview
         }
     }
 

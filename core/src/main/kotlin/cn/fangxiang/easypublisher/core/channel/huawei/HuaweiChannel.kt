@@ -1,5 +1,10 @@
 package cn.fangxiang.easypublisher.core.channel.huawei
 
+import cn.fangxiang.easypublisher.core.channel.requireSupportedStage
+import cn.fangxiang.easypublisher.core.channel.ChannelCapability
+import cn.fangxiang.easypublisher.core.channel.Evidence
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
+import cn.fangxiang.easypublisher.core.channel.Withdrawal
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
@@ -20,6 +25,19 @@ class HuaweiChannel : Channel {
 
     override val fileNameTag: String = "HUAWEI"
 
+    override val capability: ChannelCapability = ChannelCapability(
+        supportedStages = listOf(
+            ReleaseStage.UploadArtifact,
+            ReleaseStage.CreateDraft,
+            ReleaseStage.SubmitReview,
+        ),
+        riskLevel = ChannelCapability.RiskLevel.High,
+        withdrawal = Withdrawal.NotVerified,
+        evidence = Evidence.CodeObservation,
+        note = "上传与送审分离：绑定 APK 后华为生成草稿版本，可在 AppGallery Connect " +
+            "后台确认后再送审。绑定后有异步编译检查需轮询（最长 3 分钟）。",
+    )
+
     override val params: List<ChannelParam> = listOf(
         ChannelParam("client_id", "客户端ID"),
         ChannelParam("client_secret", "秘钥"),
@@ -27,8 +45,9 @@ class HuaweiChannel : Channel {
 
     private val client = HuaweiConnectClient(CHANNEL_ID)
 
-    override suspend fun upload(request: UploadRequest) {
-        client.uploadApk(
+    override suspend fun upload(request: UploadRequest): ReleaseStage {
+        requireSupportedStage(request.stopAfter)
+        return client.uploadApk(
             file = request.apkFile,
             apkInfo = request.apkInfo,
             clientId = request.credentials["client_id"],
@@ -36,6 +55,7 @@ class HuaweiChannel : Channel {
             releaseParams = request.releaseParams,
             timeouts = request.timeouts,
             progressChange = request.onProgress,
+            stopAfter = request.stopAfter,
         )
     }
 

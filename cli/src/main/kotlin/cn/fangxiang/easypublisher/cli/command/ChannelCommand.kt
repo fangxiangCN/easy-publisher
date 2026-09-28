@@ -5,6 +5,7 @@ import cn.fangxiang.easypublisher.cli.renderTable
 import cn.fangxiang.easypublisher.core.ApplicationId
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ChannelParam
+import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.channel.ChannelRegistry
 import cn.fangxiang.easypublisher.core.config.AppConfig
 import cn.fangxiang.easypublisher.core.config.AppConfigStore
@@ -49,6 +50,17 @@ private class ChannelList : SuspendingCliktCommand(name = "list") {
                                 "id" to channel.id,
                                 "displayName" to channel.displayName,
                                 "fileNameTag" to channel.fileNameTag,
+                                "capability" to mapOf(
+                                    "supportedStages" to channel.capability.supportedStages.map { it.name },
+                                    "riskLevel" to channel.capability.riskLevel.name,
+                                    "withdrawal" to channel.capability.withdrawal.name,
+                                    "requiresExplicitConfirmation" to
+                                        channel.capability.requiresExplicitConfirmation,
+                                    "automaticRetryAfterSubmission" to
+                                        channel.capability.automaticRetryAfterSubmission,
+                                    "evidence" to channel.capability.evidence.name,
+                                    "note" to channel.capability.note,
+                                ),
                                 "params" to channel.params.map { param ->
                                     mapOf(
                                         "name" to param.name,
@@ -69,6 +81,30 @@ private class ChannelList : SuspendingCliktCommand(name = "list") {
             return@runCatchingPublish
         }
 
+        // 先输出能力画像：风险等级与「能不能停在送审之前」决定了该怎么用这个渠道，
+        // 应该在动手之前就看到，而不是发完才发现没法反悔
+        echo(
+            renderTable(
+                listOf("渠道", "名称", "风险", "可停在", "撤回", "证据"),
+                ChannelRegistry.all().map { ch ->
+                    val cap = ch.capability
+                    listOf(
+                        ch.id,
+                        ch.displayName,
+                        cap.riskLevel.label,
+                        cap.supportedStages.joinToString("/") { it.shortName() },
+                        cap.withdrawal.label,
+                        cap.evidence.label,
+                    )
+                },
+            )
+        )
+        echo("")
+        ChannelRegistry.all().forEach { ch ->
+            echo("${ch.displayName}（${ch.id}）：${ch.capability.note}")
+        }
+        echo("")
+        echo("所需参数：")
         val rows = ChannelRegistry.all().flatMap { channel ->
             channel.params.map { param ->
                 val state = when {
@@ -198,6 +234,13 @@ private class ChannelToggle : SuspendingCliktCommand(name = "toggle") {
             echo("${target.displayName} 已${if (enable) "启用" else "停用"}")
         }
     }
+}
+
+/** 表格里用的短名，避免列宽被撑爆 */
+private fun ReleaseStage.shortName(): String = when (this) {
+    ReleaseStage.UploadArtifact -> "上传"
+    ReleaseStage.CreateDraft -> "草稿"
+    ReleaseStage.SubmitReview -> "送审"
 }
 
 private fun ChannelParam.ParamType.describe(): String = when (this) {
