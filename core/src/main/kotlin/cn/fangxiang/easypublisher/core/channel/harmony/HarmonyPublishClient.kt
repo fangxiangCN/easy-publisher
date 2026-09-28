@@ -1,6 +1,8 @@
 package cn.fangxiang.easypublisher.core.channel.harmony
 
 import cn.fangxiang.easypublisher.core.ArtifactInfo
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
+import cn.fangxiang.easypublisher.core.channel.ReleaseParams
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.huawei.HWTokenParams
@@ -12,13 +14,17 @@ import cn.fangxiang.easypublisher.core.net.RetrofitFactory
 import cn.fangxiang.easypublisher.core.util.Digest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import kotlin.time.Duration.Companion.seconds
 import kotlin.math.ceil
 import kotlin.math.min
 
@@ -138,6 +144,82 @@ internal class HarmonyPublishClient(private val timeouts: cn.fangxiang.easypubli
 
         AppLogger.info(LOG_TAG, "App Pack 已关联到草稿，packageId=$packageId")
         return packageId
+    }
+
+    /**
+     * 提交发布（送审）。**这是整条链路里唯一不可撤销的一步。**
+     *
+     * ## 关于 204144660 的自动重试
+     *
+     * 这个码表示「软件包尚未编译完成就提交」，是华为**明确拒绝**了本次送审 ——
+     * 结果确定，服务端没有受理，因此等待后重试不会造成重复送审。
+     *
+     * 这与网络超时的性质完全不同：超时是「不知道有没有受理」，
+     * 那种情况一律不自动重试（见 [cn.fangxiang.easypublisher.core.FailurePhase]）。
+     * 判断能否重试的依据是结果是否确定，而不是错误看起来是否「可恢复」。
+     */
+    suspend fun submitForReview(
+        clientId: String,
+        clientSecret: String,
+        appId: String,
+        releaseParams: ReleaseParams,
+        registeredIdType: Int?,
+        registeredIdNumber: String?,
+    ) {
+        val token = "Bearer ${getToken(clientId, clientSecret)}"
+
+        val releaseTime = if (releaseParams.onlineTime > 0) {
+            // 与华为 v2 渠道用同一格式：yyyy-MM-dd'T'HH:mm:ssZZ
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZZ", Locale.US).format(Date(releaseParams.onlineTime))
+        } else {
+            null
+        }
+
+        // remark 是提审备注，不是商店里的「新版本介绍」。华为要求填写时长度 10-300 字，
+        // 且它是可选字段 —— 长度不合规时宁可不传，也不要让整次送审被拒。
+        // 鸿蒙的新版本介绍需要走 v3 的语言信息接口，该接口形状未经验证，暂未实现，
+        // 因此商店里的版本介绍仍需人工到 AGC 后台维护。
+        val remark = releaseParams.updateDesc.trim().takeIf { it.length in REMARK_MIN..REMARK_MAX }
+        if (releaseParams.updateDesc.isNotBlank() && remark == null) {
+            AppLogger.info(
+                LOG_TAG,
+                "更新说明长度 ${releaseParams.updateDesc.trim().length} 不在华为 remark 要求的 " +
+                    "$REMARK_MIN-$REMARK_MAX 字范围内，本次不作为提审备注提交",
+            )
+        }
+
+        val body = HarmonySubmitReq(
+            remark = remark,
+            releaseTime = releaseTime,
+            registeredIdType = registeredIdType,
+            registeredIdNumber = registeredIdNumber?.takeIf { it.isNotBlank() },
+        )
+
+        var attempt = 0
+        while (true) {
+            try {
+                atSubmissionPoint("鸿蒙", "提交发布") {
+                    val resp = call("提交发布") { api.submit(token, clientId, appId, body) }
+                    resp.ret.throwOnFail("提交发布")
+                }
+                AppLogger.info(LOG_TAG, "已提交审核，appId=$appId")
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PublishError) {
+                if (e.code == CODE_PACKAGE_NOT_COMPILED && attempt < MAX_COMPILE_RETRIES) {
+                    attempt++
+                    AppLogger.info(
+                        LOG_TAG,
+                        "软件包尚未编译完成（$CODE_PACKAGE_NOT_COMPILED），" +
+                            "${COMPILE_RETRY_INTERVAL.inWholeSeconds} 秒后重试（$attempt/$MAX_COMPILE_RETRIES）",
+                    )
+                    delay(COMPILE_RETRY_INTERVAL)
+                    continue
+                }
+                throw e
+            }
+        }
     }
 
     private suspend fun getToken(clientId: String, clientSecret: String): String {
@@ -347,5 +429,14 @@ internal class HarmonyPublishClient(private val timeouts: cn.fangxiang.easypubli
         const val LOG_TAG = "鸿蒙应用市场Api"
         const val MAX_RAW_LENGTH = 2000
         const val PROGRESS_LOG_EVERY = 10
+
+        /** 华为 remark 字段的长度约束（填写时生效，该字段本身可选） */
+        const val REMARK_MIN = 10
+        const val REMARK_MAX = 300
+
+        /** 「软件包尚未编译完成」—— 明确拒绝，可安全重试 */
+        const val CODE_PACKAGE_NOT_COMPILED = "204144660"
+        const val MAX_COMPILE_RETRIES = 6
+        val COMPILE_RETRY_INTERVAL = 20.seconds
     }
 }

@@ -32,7 +32,9 @@ class HuaweiChannel : Channel {
             ReleaseStage.SubmitReview,
         ),
         riskLevel = ChannelCapability.RiskLevel.High,
-        withdrawal = Withdrawal.NotVerified,
+        // 华为 AGC 文档里有「撤销审核」接口，因此平台层面支持撤回。
+        // 但本工具尚未实现该调用，且其适用条件（是否仅限审核中状态）未核实
+        withdrawal = Withdrawal.ApiSupported,
         evidence = Evidence.CodeObservation,
         note = "上传与送审分离：绑定 APK 后华为生成草稿版本，可在 AppGallery Connect " +
             "后台确认后再送审。绑定后有异步编译检查需轮询（最长 3 分钟）。",

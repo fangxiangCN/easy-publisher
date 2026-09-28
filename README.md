@@ -4,8 +4,8 @@
 
 支持渠道：**华为 AppGallery、小米、OPPO、vivo、荣耀、鸿蒙 AppGallery**。
 
-其中鸿蒙渠道只做到「上传 App Pack 并关联草稿」，**不送审** —— 送审接口未经验证，
-详见[能力差异](#各渠道的能力差异)。
+鸿蒙渠道走 AGC 的 **v3** 接口（Android 版是 v2，两者路径不同不可混用），
+支持上传 App Pack、关联草稿与送审。
 
 > 本项目衍生自 [Xigong93/XiaoZhuan](https://github.com/Xigong93/XiaoZhuan)
 > （Copyright 2024 Xigong，Apache License 2.0）。原项目是一个 Compose Desktop 图形工具，
@@ -85,12 +85,16 @@ easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "�
 
 | 渠道 | 风险 | 可停在 | 撤回 | 制品 |
 |---|---|---|---|---|
-| 华为 | 高 | 上传 / **草稿** / 送审 | 未验证 | `.apk` |
+| 华为 | 高 | 上传 / **草稿** / 送审 | API 支持¹ | `.apk` |
 | 荣耀 | 高 | 上传 / **草稿** / 送审 | 未验证 | `.apk` |
 | OPPO | 极高 | 上传 / 送审 | 未验证 | `.apk` |
 | vivo | 极高 | 上传 / 送审 | 未验证 | `.apk` |
 | 小米 | 极高 | 送审 | 未验证 | `.apk` |
-| 鸿蒙 | 中 | 上传 / **草稿** | 无需撤回 | `.app` |
+| 鸿蒙 | 高 | 上传 / **草稿** / 送审 | API 支持¹ | `.app` |
+
+¹ 华为 AGC 文档里有「撤销审核」接口，所以平台层面支持撤回 —— 这与上游项目
+「各商店 API 都不提供撤销」的结论不同。但本工具**尚未实现**该调用，
+且其适用条件（是否仅限审核中状态）未核实，需要撤回时仍得到 AGC 后台操作。
 
 - **草稿**：华为和荣耀可以先上传并绑定文件形成草稿版本，登录后台人工核对无误后再送审。
   ```bash
@@ -103,13 +107,13 @@ easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "�
   ```
 - **小米无处可停**：它的 `dev/push` 把上传与送审合并成一次原子请求。
   请求 `--stop-after draft` 会立即报错，而不是默默走到送审。
-- **鸿蒙不送审**：`supportedStages` 里没有「送审」这一项。请求 `--stop-after submit`
-  会立即报错。原因是鸿蒙的送审接口未经验证 —— 送审不可撤销，
-  猜错接口的代价由用户承担，所以在验证之前不声称支持。
-  当前用途是把包传到 AGC 草稿，人工核对后在网页端送审。
-- **撤回一律标为「未验证」**：上游项目的结论是各商店 API 都不提供撤销版本更新，
-  但没人逐个后台确认过网页端能否撤回。「未验证」与「不支持」对使用者的含义不同，
-  所以如实标注。
+- **鸿蒙走 v3**：送审端点是 `api/publish/v3/app-submit`，Android 版是 v2。
+  v3 系列统一是「appId 走 query + 负载走 JSON body」，与 v2 把 releaseTime 放 query
+  的做法不同。`appId` 必须显式配置 —— 鸿蒙应用在 AGC 里是独立记录，
+  用包名反查会拿到同名 Android 应用的 id。
+- **撤回按渠道如实标注**：华为 AGC 有「撤销审核」接口（上游项目称各商店都不提供，
+  这一点不准确），其余渠道没人逐个确认过，仍标「未验证」。
+  「未验证」与「不支持」对使用者的含义不同，所以分开标。
 
 不指定 `--stop-after` 时，各渠道走到**各自能到的最远阶段** —— 多数渠道是送审，
 鸿蒙只到草稿。MCP 的 `upload_apk` 也据此判定 `confirm`：只有本次真的包含送审时才要求，
@@ -230,9 +234,20 @@ easy-publisher upload --app <包名> --artifact <包> --desc x --stop-after arti
 
 **无法撤回版本。** 各商店 API 都不提供撤销版本更新的接口。
 
-**鸿蒙只能做到草稿。** 上传 App Pack 并关联到 AGC 草稿版本，送审需要人工到网页端操作。
-鸿蒙的送审接口未经验证 —— 参照实现（app-ship）同样显式拒绝非 draft 的发布类型。
-另外鸿蒙应用的 `appId` 必须显式配置，用包名反查会拿到同名 Android 应用的 id。
+**鸿蒙送审的两处不确定。** 端点 `v3/app-submit` 与参数来自社区实现与论坛实测，
+华为官方文档页是 JS 渲染的、抓不到完整字段表。具体是：
+
+- `releaseTime` 的格式有两种说法。官方 v2 文档与一个可用的 v3 封装实现都写
+  `yyyy-MM-dd'T'HH:mm:ssZZ`，个别帖子说是毫秒时间戳。本工具采用前者
+  （两个较可靠来源一致，且与华为渠道已在用的格式相同）。
+  **若定时发布报「时间格式有误」，首先怀疑这一点。**
+- `registeredIdType` / `registeredIdNumber`（主体登记信息）做成了可选配置。
+  社区实测某些应用缺失会被拒（`registeredIdType and registeredIdNumber can not be null`），
+  但并非所有应用都需要，因此不强制。遇到该报错时用
+  `channel set --channel harmony --key registered_id_type` 补上。
+
+另外**商店里的「新版本介绍」需要人工维护**：v3 的语言信息接口形状未经验证，暂未实现。
+`--desc` 只在长度符合华为 remark 要求的 10-300 字时作为提审备注提交，否则跳过并记日志。
 
 **鸿蒙渠道未查询市场状态。** `status` 对鸿蒙会报错而不是返回猜测值：
 复用华为的 `app-info` 查到的是同名 Android 应用的记录，把它当成鸿蒙应用的状态

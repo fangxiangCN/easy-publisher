@@ -82,6 +82,20 @@ internal interface HarmonyPublishApi {
         @Body body: AppPackageInfoReq,
     ): AppPackageInfoResp
 
+    /**
+     * 提交发布（送审）。
+     *
+     * 鸿蒙走 v3，Android 走 v2 —— 两者路径不同，不可混用。
+     * 这是整条链路里唯一不可撤销的一步。
+     */
+    @POST("api/publish/v3/app-submit")
+    suspend fun submit(
+        @Header("Authorization") authorization: String,
+        @Header("client_id") clientId: String,
+        @Query("appId") appId: String,
+        @Body body: HarmonySubmitReq,
+    ): HarmonySubmitResp
+
     companion object {
         const val BASE_URL = "https://connect-api.cloud.huawei.com/"
     }

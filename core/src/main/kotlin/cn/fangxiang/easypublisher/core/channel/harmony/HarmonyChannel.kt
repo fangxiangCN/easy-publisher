@@ -18,15 +18,14 @@ import cn.fangxiang.easypublisher.core.log.redact
 /**
  * 鸿蒙应用市场（HarmonyOS AppGallery）。
  *
- * ## 只做到草稿，不送审
+ * ## 送审走 v3
  *
- * [capability] 的 supportedStages **不包含** [ReleaseStage.SubmitReview]。
- * 原因是鸿蒙的送审接口没有经过任何验证 —— 参照实现同样只做到草稿，
- * 并显式拒绝其他发布类型。在拿到真实凭据验证之前，声称支持送审是不负责任的：
- * 送审不可撤销，猜错接口的代价由用户承担。
+ * 鸿蒙的送审端点是 `api/publish/v3/app-submit`，而 Android 版是 v2 —— 路径不同，
+ * 不可混用。v3 系列（含 app-package-info）统一是「appId 走 query + 负载走 JSON body」，
+ * 与 v2 把 releaseTime 放 query 的做法不一样。
  *
- * 因此本渠道的用途是：把 App Pack 传上去、关联到 AGC 后台的草稿版本，
- * 由人工核对无误后在网页端送审。
+ * 这一步未用真实凭据验证过，[capability] 的 evidence 如实标为 CodeObservation。
+ * 建议首次使用时先 `--stop-after draft`，到 AGC 后台确认草稿正常后再送审。
  *
  * ## 与华为渠道的关系
  *
@@ -61,18 +60,37 @@ class HarmonyChannel : Channel {
             description = "鸿蒙应用在 AGC 里的 appId。注意与同名 Android 应用不是同一个 id，" +
                 "需到 AGC 后台「我的应用」里查看鸿蒙应用条目",
         ),
+        // 下面两个是可选的：社区实测某些应用送审时缺失会被拒
+        // （registeredIdType and registeredIdNumber can not be null），
+        // 但并非所有应用都需要，因此做成可选，遇到该报错时再填
+        ChannelParam(
+            name = REGISTERED_ID_TYPE,
+            description = "主体登记信息类型（可选）。送审报 " +
+                "「registeredIdType and registeredIdNumber can not be null」时才需要填",
+            required = false,
+        ),
+        ChannelParam(
+            name = REGISTERED_ID_NUMBER,
+            description = "主体登记号码（可选），与 registered_id_type 成对填写",
+            required = false,
+        ),
     )
 
     override val capability: ChannelCapability = ChannelCapability(
-        // 刻意不含 SubmitReview：鸿蒙送审未经验证，见类注释
-        supportedStages = listOf(ReleaseStage.UploadArtifact, ReleaseStage.CreateDraft),
-        riskLevel = ChannelCapability.RiskLevel.Medium,
-        // 停在草稿态本身不产生需要撤回的东西 —— 不送审就不会上架
-        withdrawal = Withdrawal.NotApplicable,
+        supportedStages = listOf(
+            ReleaseStage.UploadArtifact,
+            ReleaseStage.CreateDraft,
+            ReleaseStage.SubmitReview,
+        ),
+        riskLevel = ChannelCapability.RiskLevel.High,
+        // 华为文档里有「撤销审核」接口，所以平台层面是支持撤回的；
+        // 但本工具尚未实现该调用，需要撤回时仍得到 AGC 后台操作
+        withdrawal = Withdrawal.ApiSupported,
         evidence = Evidence.CodeObservation,
-        note = "只做到草稿：上传 App Pack 并关联到 AGC 草稿版本，不送审。" +
-            "鸿蒙的送审接口未经验证，需人工到 AGC 后台提交。" +
-            "appId 必须显式配置（鸿蒙应用在 AGC 里是独立记录）。",
+        note = "走 AGC 的 v3 接口（Android 版是 v2，两者不可混用）。" +
+            "appId 必须显式配置：鸿蒙应用在 AGC 里是独立记录，用包名反查会拿到 " +
+            "Android 应用的 id。商店里的「新版本介绍」需人工维护 —— v3 语言信息接口" +
+            "未经验证，暂未实现；updateDesc 仅在长度符合 10-300 字时作为提审备注提交。",
     )
 
     override suspend fun upload(request: UploadRequest): ReleaseStage {
@@ -98,7 +116,8 @@ class HarmonyChannel : Channel {
         AppLogger.info(LOG_TAG, "开始上传，appId=$appId，账号=${redact(clientId)}")
 
         val client = HarmonyPublishClient(request.timeouts)
-        val linkToDraft = request.stopAfter == ReleaseStage.CreateDraft
+        // 只有真的要送审时才关联草稿之后再提交；停在上传阶段连草稿都不建
+        val linkToDraft = request.stopAfter != ReleaseStage.UploadArtifact
         val packageId = client.uploadAppPack(
             artifactFile = request.artifactFile,
             artifactInfo = request.artifactInfo,
@@ -109,17 +128,27 @@ class HarmonyChannel : Channel {
             linkToDraft = linkToDraft,
         )
 
-        return if (linkToDraft) {
+        if (request.stopAfter == ReleaseStage.UploadArtifact) {
+            AppLogger.info(LOG_TAG, "App Pack 已上传至华为文件服务（objectId=$packageId），未关联草稿")
+            return ReleaseStage.UploadArtifact
+        }
+        if (request.stopAfter == ReleaseStage.CreateDraft) {
             AppLogger.info(
                 LOG_TAG,
-                "草稿已就绪（packageId=$packageId），未送审。" +
-                    "请到 AGC 后台核对后再手动提交审核",
+                "草稿已就绪（packageId=$packageId），未送审。可到 AGC 后台核对后再送审",
             )
-            ReleaseStage.CreateDraft
-        } else {
-            AppLogger.info(LOG_TAG, "App Pack 已上传至华为文件服务，未关联草稿")
-            ReleaseStage.UploadArtifact
+            return ReleaseStage.CreateDraft
         }
+
+        client.submitForReview(
+            clientId = clientId,
+            clientSecret = clientSecret,
+            appId = appId,
+            releaseParams = request.releaseParams,
+            registeredIdType = request.credentials.optional(REGISTERED_ID_TYPE)?.toIntOrNull(),
+            registeredIdNumber = request.credentials.optional(REGISTERED_ID_NUMBER),
+        )
+        return ReleaseStage.SubmitReview
     }
 
     override suspend fun queryMarket(query: MarketQuery): MarketInfo {
@@ -139,5 +168,7 @@ class HarmonyChannel : Channel {
         const val CLIENT_ID = "client_id"
         const val CLIENT_SECRET = "client_secret"
         const val APP_ID = "app_id"
+        const val REGISTERED_ID_TYPE = "registered_id_type"
+        const val REGISTERED_ID_NUMBER = "registered_id_number"
     }
 }

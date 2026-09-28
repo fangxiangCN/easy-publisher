@@ -85,6 +85,44 @@ data class AppPackageInfoResp(
 data class PackageIdHolder(val packageId: String? = null)
 
 /**
+ * `api/publish/v3/app-submit` 的请求体。
+ *
+ * ## 为什么是 body 而不是 query
+ *
+ * 华为的 v2 `app-submit` 把 releaseTime 放在 query 上（见华为渠道的实现），
+ * 但 v3 系列接口（如 app-package-info）统一是「appId 走 query + 负载走 JSON body」。
+ * 另外社区实测报错 `registeredIdType and registeredIdNumber can not be null`
+ * 说明服务端确实在解析 body 字段。因此这里按 v3 的惯例用 body。
+ *
+ * ## releaseTime 的格式存在两种说法
+ *
+ * 官方 v2 文档与一个可用的 v3 封装实现都写 `yyyy-MM-dd'T'HH:mm:ssZZ`
+ * （形如 2026-10-01T10:00:00+0800），而个别社区帖子说是毫秒时间戳。
+ * 这里采用前者：两个较可靠的来源一致，且与本项目华为渠道已在用的格式相同。
+ * 若定时发布报「时间格式有误」，应首先怀疑这一点。
+ *
+ * ## 不含 releaseType / releasePhase
+ *
+ * 不传即全网发布。分阶段发布需要额外的一组字段（比例、时间窗、国家分级），
+ * 尚未验证，因此不猜测性地塞进去。
+ */
+data class HarmonySubmitReq(
+    /** 提审备注。可空；若填写，华为要求长度 10-300 字 */
+    val remark: String? = null,
+    /** 定时上架时间；为 null 时 Moshi 省略该字段，等价于审核通过后立即上架 */
+    val releaseTime: String? = null,
+    /**
+     * 主体登记信息。社区实测缺失会被服务端拒绝
+     * （`registeredIdType and registeredIdNumber can not be null`），
+     * 但并非所有应用都需要，因此做成可选配置：用户遇到该报错时再填。
+     */
+    val registeredIdType: Int? = null,
+    val registeredIdNumber: String? = null,
+)
+
+data class HarmonySubmitResp(val ret: HarmonyRet? = null)
+
+/**
  * 把 [PartUploadInfo.headers] 归一化成字符串键值对。
  *
  * 华为可能返回对象，也可能返回 JSON 字符串；两种都要能处理，

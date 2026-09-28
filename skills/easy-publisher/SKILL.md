@@ -26,7 +26,7 @@ description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五�
 | 华为 / 荣耀 | `artifact` / `draft` / `submit` | 高 | `.apk` |
 | OPPO / vivo | `artifact` / `submit`（无草稿态） | 极高 | `.apk` |
 | 小米 | 仅 `submit`（`dev/push` 是原子请求） | 极高 | `.apk` |
-| 鸿蒙 | `artifact` / `draft`（**不能送审**） | 中 | `.app` |
+| 鸿蒙 | `artifact` / `draft` / `submit` | 高 | `.app` |
 
 `--stop-after` 三档：
 
@@ -39,9 +39,14 @@ description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五�
 
 不指定 `--stop-after` 时，各渠道走到各自能到的最远阶段。
 
-**鸿蒙特别说明**：只能创建草稿，送审必须人工到 AGC 网页端操作。它的 `app_id`
-要单独配置（与同名 Android 应用不是同一个 id），且 `status` 对鸿蒙会报错 ——
-不要试图用华为渠道的状态推断鸿蒙应用的状态。
+**鸿蒙特别说明**：
+
+- `app_id` 必须单独配置，与同名 Android 应用不是同一个 id。
+- `status` 对鸿蒙会报错 —— 不要试图用华为渠道的状态推断鸿蒙应用的状态，
+  那查到的是 Android 应用记录。因此鸿蒙上传时会跳过线上版本号比对，日志里有记录。
+- 商店里的「新版本介绍」需人工到 AGC 后台维护；`--desc` 只在长度符合 10-300 字时
+  作为提审备注提交。
+- 首次使用建议先 `--stop-after draft`，到后台确认草稿正常后再送审。
 
 ## 首次使用某个渠道时
 
