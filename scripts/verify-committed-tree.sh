@@ -38,10 +38,21 @@ echo "==> [3/3] 构建"
 ./gradlew build --no-daemon --quiet
 echo "    Kotlin: ok"
 
-if [ -d go ]; then
-  (cd go && go build ./... && go vet ./... && go test ./...)
-  echo "    Go: ok"
+if [ -d go ] && [ -n "$(find go -name '*.go' -print -quit 2>/dev/null)" ]; then
+  if command -v go >/dev/null 2>&1; then
+    (cd go && go build ./... && go vet ./... && go test ./...)
+    echo "    Go: ok"
+  else
+    # 环境问题而非仓库问题，所以只警告不失败。
+    # 但要说清楚：Go 代码存在却没被验证过，「已提交的树可构建」这句话此时只覆盖 Kotlin。
+    echo "    Go: 跳过 —— 未安装 go 工具链，go/ 下的代码未经构建验证" >&2
+    GO_VERIFIED=0
+  fi
 fi
 
 echo ""
-echo "==> 已提交的树可构建"
+if [ "${GO_VERIFIED:-1}" = "1" ]; then
+  echo "==> 已提交的树可构建"
+else
+  echo "==> 已提交的树可构建（仅 Kotlin；Go 部分未验证）"
+fi
