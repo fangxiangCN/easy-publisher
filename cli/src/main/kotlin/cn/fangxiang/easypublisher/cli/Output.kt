@@ -30,6 +30,7 @@ object Output {
         channel: String? = null,
         code: String? = null,
         retryable: Boolean = false,
+        phase: String? = null,
     ): String = json(
         mapOf(
             "ok" to false,
@@ -38,6 +39,9 @@ object Output {
             "code" to code,
             "message" to message,
             "retryable" to retryable,
+            // 越过送审点后 retryable 恒为 false，但调用方需要知道「为什么不能重试」：
+            // 不是错误本身不可恢复，而是无法确定服务端是否已受理
+            "phase" to phase,
         )
     )
 }

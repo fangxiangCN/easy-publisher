@@ -148,8 +148,13 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
                             ) + if (stage is ChannelStage.Failed) {
                                 mapOf(
                                     "kind" to stage.kind.name,
+                                    "kindLabel" to stage.kind.label,
                                     "code" to stage.code,
                                     "retryable" to stage.retryable,
+                                    // 越过送审点后 retryable 恒为 false，phase 说明原因：
+                                    // 不是错误不可恢复，而是无法确定服务端是否已受理
+                                    "phase" to stage.phase.name,
+                                    "detail" to stage.message,
                                 )
                             } else {
                                 emptyMap()

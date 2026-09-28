@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.honor
 
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.ApkInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
@@ -229,7 +230,10 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
         } else {
             HonorSubmitParam(releaseType = 1, releaseTime = null)
         }
-        call("提交审核") { api.submit(token, appId, params) }.throwOnFail("提交审核")
+        // 送审不可撤销，之后的失败一律不标记为可重试（见 atSubmissionPoint）
+        atSubmissionPoint("荣耀", "提交审核") {
+            call("提交审核") { api.submit(token, appId, params) }.throwOnFail("提交审核")
+        }
     }
 
     /**

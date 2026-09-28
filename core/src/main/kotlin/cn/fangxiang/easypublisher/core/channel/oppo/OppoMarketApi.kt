@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.oppo
 
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.ApkInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
@@ -186,8 +187,12 @@ internal class OppoMarketApi(
         // 签名用的参数集合必须与 body 完全一致，否则服务端重算签名不匹配
         val url = signedUrl("$DOMAIN/resource/v1/app/upd", params, token, appendParamsToQuery = false)
         val request = Request.Builder().url(url).post(body).build()
-        val responseBody = client.textResponse(request, CHANNEL_ID)
-        checkSuccess(responseBody, "提交版本")
+        // app/upd 是送审动作，不可撤销。响应解析失败也属于「不知道有没有受理」，
+        // 同样不能标记为可重试（见 atSubmissionPoint）。
+        atSubmissionPoint("OPPO", "提交版本") {
+            val responseBody = client.textResponse(request, CHANNEL_ID)
+            checkSuccess(responseBody, "提交版本")
+        }
     }
 
     private fun buildSubmitParams(

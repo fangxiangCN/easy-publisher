@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.vivo
 
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
 import cn.fangxiang.easypublisher.core.net.Json
@@ -101,9 +102,13 @@ internal class VivoMarketApi(
         }
         val url = signedUrl("app.sync.update.app", params)
         val request = Request.Builder().url(url).get().build()
-        val body = client.textResponse(request, VivoChannel.ID)
-        val response = Json.parse<VivoSubmitResponse>(VivoChannel.ID, body)
-        response.ensureSuccess("提交更新", body)
+        // 请求一旦发出就进入不可撤销区间。注意连响应解析也纳入保护：
+        // 解析失败同样意味着「不知道服务端有没有受理」，不能当成可重试的普通错误。
+        atSubmissionPoint("vivo", "提交更新") {
+            val body = client.textResponse(request, VivoChannel.ID)
+            val response = Json.parse<VivoSubmitResponse>(VivoChannel.ID, body)
+            response.ensureSuccess("提交更新", body)
+        }
     }
 
     private suspend fun md5Of(apkFile: File): String = withContext(Dispatchers.IO) {

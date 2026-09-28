@@ -30,6 +30,43 @@ enum class ErrorKind {
     Precondition,
 
     Unknown,
+    ;
+
+    /** 中文标签，用于表格等空间受限的场合 */
+    val label: String
+        get() = when (this) {
+            Configuration -> "配置错误"
+            Credential -> "凭据问题"
+            LocalFile -> "本地文件问题"
+            Network -> "网络失败"
+            ChannelRejected -> "渠道拒绝"
+            ProtocolMismatch -> "接口不匹配"
+            Precondition -> "不满足前置条件"
+            Unknown -> "未知错误"
+        }
+}
+
+/**
+ * 失败发生在发布流程的哪个阶段。
+ *
+ * 重试是否安全不只取决于错误类型，还取决于远端是否已经产生了不可撤销的副作用。
+ */
+enum class FailurePhase {
+    /**
+     * 尚未越过送审点（取 token、查状态、上传文件、绑定草稿等）。
+     *
+     * 重试是安全的：远端最多留下一个草稿，不会产生重复的正式版本。
+     */
+    PreSubmission,
+
+    /**
+     * 已越过送审点，或无法确定是否越过。
+     *
+     * 此时任何失败都不能盲目重试 —— 服务端可能已经受理请求，只是响应在回程丢失
+     * （超时、连接重置都会表现成这样）。重试会重复送审或产生重复版本，
+     * 而各应用商店都不提供撤销版本更新的 API。
+     */
+    AtOrAfterSubmission,
 }
 
 /**
@@ -49,15 +86,47 @@ class PublishError(
     /** 渠道原始响应，便于排查接口变更 */
     val raw: String? = null,
     cause: Throwable? = null,
+    /** 失败发生的阶段，决定是否可以重试 */
+    val phase: FailurePhase = FailurePhase.PreSubmission,
 ) : Exception(message, cause) {
 
-    /** 是否值得自动重试 */
+    /**
+     * 是否值得自动重试。
+     *
+     * 越过送审点之后一律为 false —— 见 [FailurePhase.AtOrAfterSubmission]。
+     */
     val retryable: Boolean
-        get() = when (kind) {
-            ErrorKind.Network -> true
-            ErrorKind.Unknown -> true
+        get() = when {
+            phase == FailurePhase.AtOrAfterSubmission -> false
+            kind == ErrorKind.Network -> true
+            kind == ErrorKind.Unknown -> true
             else -> false
         }
+
+    /**
+     * 标记这个错误发生在送审点或之后，并在 message 后追加确认提示。
+     *
+     * 保留 [kind] / [code] / [channel] / [raw] / cause 链，只改变重试语义。
+     *
+     * @param displayName 渠道展示名，用于提示语
+     * @param action 越过送审点的那一步，如「提交审核」
+     */
+    fun atSubmissionPoint(displayName: String, action: String): PublishError {
+        if (phase == FailurePhase.AtOrAfterSubmission) return this
+        val hint = "$action 可能已被服务端受理（响应在回程丢失也会报此错误）。" +
+            "请先登录$displayName 开发者后台确认该版本是否已提交成功，" +
+            "确认未提交后再重试 —— 重复送审无法撤销。"
+        val original = message ?: ""
+        return PublishError(
+            kind = kind,
+            channel = channel,
+            code = code,
+            message = if (original.isEmpty()) hint else "$original。$hint",
+            raw = raw,
+            cause = cause,
+            phase = FailurePhase.AtOrAfterSubmission,
+        )
+    }
 
     fun describe(): String = buildString {
         channel?.let { append('[').append(it).append("] ") }

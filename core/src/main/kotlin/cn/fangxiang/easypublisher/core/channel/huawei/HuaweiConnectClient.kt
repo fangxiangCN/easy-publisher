@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.huawei
 
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.ApkInfo
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.PublishError
@@ -269,8 +270,12 @@ internal class HuaweiConnectClient(private val channelId: String) {
         } else {
             null
         }
-        val result = step("提交审核") { api.submit(clientId, token, appId, time) }
-        result.result.throwOnFail(channelId, "提交审核")
+        // 送审是整条链路里唯一不可撤销的动作，之后的任何失败都不能盲目重试：
+        // 服务端可能已受理，只是响应在回程丢失。见 atSubmissionPoint 的说明。
+        atSubmissionPoint("华为", "提交审核") {
+            val result = step("提交审核") { api.submit(clientId, token, appId, time) }
+            result.result.throwOnFail(channelId, "提交审核")
+        }
     }
 
     /**

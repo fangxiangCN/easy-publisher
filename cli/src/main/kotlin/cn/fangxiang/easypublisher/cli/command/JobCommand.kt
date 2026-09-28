@@ -53,12 +53,16 @@ private class JobStatus : SuspendingCliktCommand(name = "status") {
                         "versionCode" to job.versionCode,
                         "versionName" to job.versionName,
                         "channels" to job.channels.map { progress ->
+                            val failed = progress.stage as? ChannelStage.Failed
                             mapOf(
                                 "id" to progress.channelId,
                                 "state" to progress.stage::class.simpleName,
                                 "message" to progress.stage.label,
-                                "retryable" to
-                                    ((progress.stage as? ChannelStage.Failed)?.retryable ?: false),
+                                "retryable" to (failed?.retryable ?: false),
+                                // phase 解释「为什么不可重试」：越过送审点后无法确定
+                                // 服务端是否已受理，重试可能造成重复版本
+                                "phase" to (failed?.phase?.name ?: "NotApplicable"),
+                                "detail" to failed?.message,
                             )
                         },
                     )

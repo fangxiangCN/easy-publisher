@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel.mi
 
+import cn.fangxiang.easypublisher.core.atSubmissionPoint
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
 import cn.fangxiang.easypublisher.core.net.Json
 import cn.fangxiang.easypublisher.core.net.ProgressBody
@@ -110,9 +111,18 @@ internal class MiMarketApi {
             .addFormDataPart("SIG", MiApiSigner.encrypt(sig, certificate))
             .build()
         val request = Request.Builder().url(PUSH).post(body).build()
-        val response = client(timeouts).textResponse(request, MI_CHANNEL_ID)
-        val result = Json.parse<MiCommonResp>(MI_CHANNEL_ID, response)
-        checkMiResult(result.result, result.message, "上传 APK", response)
+        // 小米的 dev/push 把「上传 APK」和「提交审核」合并成一次请求，
+        // 因此整个调用都落在不可撤销区间内，无法像其他渠道那样只保护最后一步。
+        //
+        // 这里有个已知的取舍：若失败发生在上传途中，服务端几乎肯定没有受理，
+        // 此时重试其实是安全的。但客户端无法区分「上传中断」与「已受理但响应丢失」，
+        // 而两者代价不对称 —— 重复送审不可撤销，多做一次人工确认只是麻烦。
+        // 因此一律按不可重试处理，并在提示里说明需要先到后台确认。
+        atSubmissionPoint("小米", "上传并提交审核") {
+            val response = client(timeouts).textResponse(request, MI_CHANNEL_ID)
+            val result = Json.parse<MiCommonResp>(MI_CHANNEL_ID, response)
+            checkMiResult(result.result, result.message, "上传并提交审核", response)
+        }
     }
 
     private fun buildSig(password: String, items: List<MiSigPayload.Item>): String =

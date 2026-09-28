@@ -1,6 +1,7 @@
 package cn.fangxiang.easypublisher.core.service
 
 import cn.fangxiang.easypublisher.core.ErrorKind
+import cn.fangxiang.easypublisher.core.FailurePhase
 import cn.fangxiang.easypublisher.core.PublishError
 
 /** 单个渠道的提交阶段 */
@@ -21,7 +22,23 @@ sealed interface ChannelStage {
         val code: String?,
         val message: String,
         val retryable: Boolean,
-    ) : ChannelStage
+        /** 失败发生在送审点之前还是之后，决定重试是否安全 */
+        val phase: FailurePhase = FailurePhase.PreSubmission,
+    ) : ChannelStage {
+
+        /**
+         * 表格用的简短结论。
+         *
+         * [message] 在越过送审点时会带上「先到后台确认」的长提示，塞进表格会把列宽
+         * 撑爆，所以表格只显示结论，完整原因另走 stderr 或 JSON 输出。
+         */
+        val summary: String
+            get() = when {
+                phase == FailurePhase.AtOrAfterSubmission -> "失败（${kind.label}，已送审需人工确认）"
+                code != null -> "失败（${kind.label} code=$code）"
+                else -> "失败（${kind.label}）"
+            }
+    }
 
     data object Cancelled : ChannelStage
 
@@ -31,7 +48,7 @@ sealed interface ChannelStage {
             is Working -> action
             is Uploading -> "上传中 ${(fraction * 100).toInt()}%"
             is Succeeded -> "已提交"
-            is Failed -> "失败：$message"
+            is Failed -> summary
             is Cancelled -> "已取消"
         }
 
@@ -44,6 +61,7 @@ sealed interface ChannelStage {
             code = error.code,
             message = error.describe(),
             retryable = error.retryable,
+            phase = error.phase,
         )
     }
 }
