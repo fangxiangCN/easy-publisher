@@ -14,9 +14,16 @@ local.properties
 *.pfx
 *.pem
 *.key
-*secret*
-*credential*
+*.secret
+*.secrets
+/secrets/
+/credentials/
 **/apps/*.json
+
+# 不要加 *secret* / *credential* 这类按子串匹配的模式。
+# 它们会静默排除 CredentialStore.kt 这种正常命名的源码文件，后果是本地
+# ./gradlew build 一直绿、而远端仓库编译不过（实际发生过，持续 7 次推送，
+# 见 cf52205）。新增忽略规则后请跑 scripts/verify-committed-tree.sh。
 
 ### IDE ###
 .idea/

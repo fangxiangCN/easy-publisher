@@ -59,6 +59,7 @@ private class ChannelList : SuspendingCliktCommand(name = "list") {
                                     "automaticRetryAfterSubmission" to
                                         channel.capability.automaticRetryAfterSubmission,
                                     "evidence" to channel.capability.evidence.name,
+                                    "verifiedScope" to channel.capability.verifiedScope,
                                     "note" to channel.capability.note,
                                 ),
                                 "params" to channel.params.map { param ->
@@ -102,6 +103,7 @@ private class ChannelList : SuspendingCliktCommand(name = "list") {
         echo("")
         ChannelRegistry.all().forEach { ch ->
             echo("${ch.displayName}（${ch.id}）：${ch.capability.note}")
+            ch.capability.verifiedScope?.let { echo("    实测范围：$it") }
         }
         echo("")
         echo("所需参数：")

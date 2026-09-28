@@ -39,7 +39,8 @@ class OppoChannel : Channel {
         supportedStages = listOf(ReleaseStage.UploadArtifact, ReleaseStage.SubmitReview),
         riskLevel = ChannelCapability.RiskLevel.Critical,
         withdrawal = Withdrawal.NotVerified,
-        evidence = Evidence.CodeObservation,
+        evidence = Evidence.VerifiedInProduction,
+        verifiedScope = "鉴权、签名请求、文件上传已用真实凭据跑通；送审（app/upd）未验证",
         note = "app/upd 是全量更新语义：必须把从 app/info 读回的图标、截图、介绍、分类、" +
             "软著等字段原样回传，漏任何一个会被清空或被拒。没有草稿态可检视；" +
             "单独上传安装包只能验证凭据与文件是否被接受。",

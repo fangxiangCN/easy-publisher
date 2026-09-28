@@ -86,7 +86,8 @@ class HarmonyChannel : Channel {
         // 华为文档里有「撤销审核」接口，所以平台层面是支持撤回的；
         // 但本工具尚未实现该调用，需要撤回时仍得到 AGC 后台操作
         withdrawal = Withdrawal.ApiSupported,
-        evidence = Evidence.CodeObservation,
+        evidence = Evidence.VerifiedInProduction,
+        verifiedScope = "鉴权、App Pack 分片上传、v3 关联草稿已用真实凭据跑通；送审（v3 app-submit）未验证",
         note = "走 AGC 的 v3 接口（Android 版是 v2，两者不可混用）。" +
             "appId 必须显式配置：鸿蒙应用在 AGC 里是独立记录，用包名反查会拿到 " +
             "Android 应用的 id。商店里的「新版本介绍」需人工维护 —— v3 语言信息接口" +

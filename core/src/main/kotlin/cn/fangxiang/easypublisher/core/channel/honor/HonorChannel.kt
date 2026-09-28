@@ -33,7 +33,8 @@ class HonorChannel : Channel {
         ),
         riskLevel = ChannelCapability.RiskLevel.High,
         withdrawal = Withdrawal.NotVerified,
-        evidence = Evidence.CodeObservation,
+        evidence = Evidence.VerifiedInProduction,
+        verifiedScope = "鉴权、APK 上传、绑定草稿已用真实凭据跑通；送审未验证",
         note = "上传与送审分离：绑定文件并更新版本描述后即形成草稿，可在荣耀开发者后台" +
             "确认后再送审。releaseType=1 审核通过后立即发布，2 为定时发布。",
     )

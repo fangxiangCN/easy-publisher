@@ -36,7 +36,8 @@ class VivoChannel : Channel {
         supportedStages = listOf(ReleaseStage.UploadArtifact, ReleaseStage.SubmitReview),
         riskLevel = ChannelCapability.RiskLevel.Critical,
         withdrawal = Withdrawal.NotVerified,
-        evidence = Evidence.CodeObservation,
+        evidence = Evidence.VerifiedInProduction,
+        verifiedScope = "鉴权、签名请求、文件上传已用真实凭据跑通；送审未验证",
         note = "app.sync.update.app 一次完成版本更新与送审，没有草稿态。" +
             "onlineType=1 审核通过后立即上架，2 为定时上架。" +
             "签名参数全部走 query（router/rest 网关的强制要求）。",

@@ -118,6 +118,16 @@ data class ChannelCapability(
 
     val evidence: Evidence,
 
+    /**
+     * 已验证的范围，仅当 [evidence] 为 [Evidence.VerifiedInProduction] 时有意义。
+     *
+     * 单独成一个字段而不是塞进 [note]，是因为「实测过」这句话很容易被读成
+     * 「整条链路都实测过」。实际上目前验证到的只是鉴权与上传/建草稿，
+     * **送审路径一个渠道都没验证过** —— 而送审恰恰是不可撤销的那一步。
+     * 把范围显式写出来，才不会让人误判风险。
+     */
+    val verifiedScope: String? = null,
+
     /** 给使用者看的说明，尤其是与直觉不符的地方 */
     val note: String,
 ) {

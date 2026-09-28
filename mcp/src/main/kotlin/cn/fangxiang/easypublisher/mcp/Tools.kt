@@ -116,6 +116,7 @@ private fun Server.registerListChannels() = addTool(
                                     )
                                     put("evidence", cap.evidence.name)
                                     put("evidenceLabel", cap.evidence.label)
+                                    put("verifiedScope", cap.verifiedScope)
                                     put("note", cap.note)
                                     putJsonArray("supportedStages") {
                                         cap.supportedStages.forEach { add(it.name) }

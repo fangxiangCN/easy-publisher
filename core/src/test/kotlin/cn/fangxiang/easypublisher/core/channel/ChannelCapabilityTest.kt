@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -84,16 +85,11 @@ class ChannelCapabilityTest {
      * 而正确的做法是实现它并标注证据等级。
      */
     @Test
-    fun `所有渠道都支持送审且证据等级如实标注`() {
+    fun `所有渠道都支持送审`() {
         channels.forEach { channel ->
             assertTrue(
                 channel.capability.supports(ReleaseStage.SubmitReview),
                 "${channel.id} 应当支持送审",
-            )
-            assertEquals(
-                Evidence.CodeObservation,
-                channel.capability.evidence,
-                "${channel.id} 尚未用真实凭据验证，evidence 不应被抬高",
             )
         }
     }
@@ -101,22 +97,55 @@ class ChannelCapabilityTest {
     /**
      * 诚实性守卫。
      *
-     * 本项目的渠道逻辑从上游继承而来，**从未用真实凭据向任何商店实际提交过**。
-     * 因此所有渠道的 evidence 都必须是 [Evidence.CodeObservation]。
+     * 这个断言故意写成「会失败的形式」：任何人想声称某渠道已实测，都必须显式改
+     * 这里，不能悄悄把 evidence 抬高。
      *
-     * 当你在某个渠道上真机跑通之后，请把它改成 VerifiedInProduction 并同步更新
-     * 这个测试 —— 这个断言故意写成会失败的形式，就是为了不让「已实测」
-     * 被随手加上去。
+     * 当前事实（见提交 cf52205）：华为、荣耀、鸿蒙、OPPO、vivo 的**鉴权与上传/建草稿**
+     * 已用真实凭据跑通；小米完全没验证过。
+     *
+     * 两条不变式：
+     *  1. 小米必须保持 CodeObservation，直到它真的被验证过
+     *  2. 任何标为 VerifiedInProduction 的渠道都必须写明 verifiedScope，
+     *     且范围里必须出现「未验证」字样 —— 「已实测」不含范围就没有信息量，
+     *     而且极易被读成「整条链路都实测过」。实际上送审路径六个渠道一个都没跑过，
+     *     而送审恰恰是不可撤销的那一步。
      */
     @Test
-    fun `所有渠道的证据等级都还是代码推断`() {
+    fun `证据等级与验证范围必须如实标注`() {
+        val verified = listOf("huawei", "honor", "harmony", "oppo", "vivo")
+
         channels.forEach { channel ->
-            assertEquals(
-                Evidence.CodeObservation,
-                channel.capability.evidence,
-                "${channel.id} 的 evidence 被改成了 ${channel.capability.evidence.label}，" +
-                    "但该渠道尚未用真实凭据验证过。若确实已验证，请一并更新本测试",
-            )
+            if (channel.id in verified) {
+                assertEquals(
+                    Evidence.VerifiedInProduction,
+                    channel.capability.evidence,
+                    "${channel.id} 的鉴权与上传已实测，evidence 应当反映这一点",
+                )
+                val scope = channel.capability.verifiedScope
+                assertTrue(
+                    !scope.isNullOrBlank(),
+                    "${channel.id} 标为已实测却没写验证范围，读的人会误以为全链路都验证过",
+                )
+                assertTrue(
+                    scope.contains("未验证"),
+                    "${channel.id} 的验证范围必须写明哪些没验证：$scope",
+                )
+                assertFalse(
+                    scope.contains("送审已") || scope.contains("全流程"),
+                    "${channel.id} 的送审路径未经验证，范围描述不得暗示已验证：$scope",
+                )
+            } else {
+                assertEquals(
+                    Evidence.CodeObservation,
+                    channel.capability.evidence,
+                    "${channel.id} 尚未用真实凭据验证过，不能标为已实测。" +
+                        "若确实已验证，请一并更新本测试与 verifiedScope",
+                )
+                assertNull(
+                    channel.capability.verifiedScope,
+                    "${channel.id} 未实测，不应有验证范围",
+                )
+            }
         }
     }
 
