@@ -42,8 +42,7 @@ internal class MiMarketApi {
     ): MiAppInfoResp {
         // RequestData 必须「序列化一次」：表单里发的和参与 MD5 的必须是同一份字符串，
         // 否则服务端算出的 hash 与我们给的不一致，直接鉴权失败。
-        val requestData = Json.adapter<MiQueryRequest>()
-            .toJson(MiQueryRequest(userName = account, packageName = packageName))
+        val requestData = buildQueryRequestData(account, packageName)
         val sig = buildSig(
             password = password,
             items = listOf(
@@ -76,20 +75,7 @@ internal class MiMarketApi {
         timeouts: HttpTimeouts,
         progressChange: ProgressChange,
     ) {
-        val requestData = Json.adapter<MiPushRequest>().toJson(
-            MiPushRequest(
-                userName = account,
-                // 1 = 更新已有 app，发版场景固定如此
-                synchroType = 1,
-                appInfo = MiPushRequest.AppInfo(
-                    appName = packageInfo.appName.orEmpty(),
-                    packageName = packageInfo.packageName.orEmpty(),
-                    updateDesc = updateDesc,
-                    // 非定时发布时不带该字段，与原实现一致
-                    onlineTime = onlineTime.takeIf { it > 0 },
-                ),
-            )
-        )
+        val requestData = buildPushRequestData(account, packageInfo, updateDesc, onlineTime)
         val sig = buildSig(
             password = password,
             items = listOf(
@@ -125,7 +111,7 @@ internal class MiMarketApi {
         }
     }
 
-    private fun buildSig(password: String, items: List<MiSigPayload.Item>): String =
+    internal fun buildSig(password: String, items: List<MiSigPayload.Item>): String =
         Json.adapter<MiSigPayload>().toJson(MiSigPayload(password = password, sig = items))
 
     private fun client(timeouts: HttpTimeouts) =
@@ -150,3 +136,37 @@ internal class MiMarketApi {
         const val APK_MEDIA_TYPE = "application/octet-stream"
     }
 }
+
+/**
+ * 构造 `dev/query` 的 RequestData JSON。
+ *
+ * 抽成顶层纯函数是为了黄金向量测试：跨语言重写时，JSON 的字段顺序、
+ * 是否省略 null、数字是否带引号，任何一处不同都会让 MD5 变化，
+ * 进而让服务端算出的 hash 与我们提交的不一致 —— 表现为笼统的鉴权失败。
+ */
+internal fun buildQueryRequestData(account: String, packageName: String): String =
+    Json.adapter<MiQueryRequest>().toJson(MiQueryRequest(userName = account, packageName = packageName))
+
+/**
+ * 构造 `dev/push` 的 RequestData JSON。
+ *
+ * `synchroType` 固定为 1（更新已有 app）；`onlineTime` 为 0 时整个字段省略，
+ * 与原实现的条件 put 行为一致。
+ */
+internal fun buildPushRequestData(
+    account: String,
+    packageInfo: MiPackageInfo,
+    updateDesc: String,
+    onlineTime: Long,
+): String = Json.adapter<MiPushRequest>().toJson(
+    MiPushRequest(
+        userName = account,
+        synchroType = 1,
+        appInfo = MiPushRequest.AppInfo(
+            appName = packageInfo.appName.orEmpty(),
+            packageName = packageInfo.packageName.orEmpty(),
+            updateDesc = updateDesc,
+            onlineTime = onlineTime.takeIf { it > 0 },
+        ),
+    )
+)

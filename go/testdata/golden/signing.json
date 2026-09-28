@@ -1,0 +1,136 @@
+{
+  "_comment": "由 GoldenVectorTest 生成，供 Go 重写时逐字节比对。重新生成见该测试的 KDoc。",
+  "fixedTimestampMillis": 1700000000000,
+  "oppo": [
+    {
+      "name": "app-info-典型请求",
+      "secret": "test-oppo-secret-0123456789",
+      "params": {
+        "access_token": "test-access-token",
+        "timestamp": "1700000000000",
+        "pkg_name": "com.example.app"
+      },
+      "canonical": "access_token=test-access-token&pkg_name=com.example.app&timestamp=1700000000000",
+      "signature": "a45afa779532493597c9f8a8b5f13e2c9bb0c758fd9537d4baab74b86cd91249"
+    },
+    {
+      "name": "含特殊字符与中文",
+      "secret": "test-secret-with-&-and-=-chars",
+      "params": {
+        "update_desc": "修复 A&B=C 的问题，支持中文",
+        "pkg_name": "com.example.app",
+        "timestamp": "1700000000001"
+      },
+      "canonical": "pkg_name=com.example.app&timestamp=1700000000001&update_desc=修复 A&B=C 的问题，支持中文",
+      "signature": "06b816ef32ab33dfbed83a69d07c3f132e6d56034388876f84efffdb3355a516"
+    },
+    {
+      "name": "单参数",
+      "secret": "s",
+      "params": {
+        "timestamp": "1"
+      },
+      "canonical": "timestamp=1",
+      "signature": "3f03a0db38c0960e3a31561c66ba49af42605954fd548e6ec6f1c461727674b8"
+    }
+  ],
+  "vivo": [
+    {
+      "name": "提交更新",
+      "accessKey": "test-vivo-access-key",
+      "accessSecret": "test-vivo-access-secret",
+      "method": "app.sync.update.app",
+      "originParams": {
+        "packageName": "com.example.app",
+        "versionCode": "1020",
+        "apk": "serialnumber-abc",
+        "fileMd5": "d41d8cd98f00b204e9800998ecf8427e",
+        "onlineType": "1",
+        "updateDesc": "修复若干问题"
+      },
+      "timestampMillis": 1700000000000,
+      "canonical": "access_key=test-vivo-access-key&apk=serialnumber-abc&fileMd5=d41d8cd98f00b204e9800998ecf8427e&format=json&method=app.sync.update.app&onlineType=1&packageName=com.example.app&sign_method=HMAC-SHA256&target_app_key=developer&timestamp=1700000000000&updateDesc=修复若干问题&v=1.0&versionCode=1020",
+      "signature": "cf968ccde1625f3759f326090e497db9e2549886b8b4d1c4867d55e8e7944c12",
+      "signedParams": {
+        "packageName": "com.example.app",
+        "versionCode": "1020",
+        "apk": "serialnumber-abc",
+        "fileMd5": "d41d8cd98f00b204e9800998ecf8427e",
+        "onlineType": "1",
+        "updateDesc": "修复若干问题",
+        "access_key": "test-vivo-access-key",
+        "timestamp": "1700000000000",
+        "method": "app.sync.update.app",
+        "v": "1.0",
+        "sign_method": "HMAC-SHA256",
+        "format": "json",
+        "target_app_key": "developer",
+        "sign": "cf968ccde1625f3759f326090e497db9e2549886b8b4d1c4867d55e8e7944c12"
+      }
+    },
+    {
+      "name": "查询应用详情",
+      "accessKey": "test-vivo-access-key",
+      "accessSecret": "test-vivo-access-secret",
+      "method": "app.sync.getappinfo",
+      "originParams": {
+        "packageName": "com.example.app"
+      },
+      "timestampMillis": 1700000000000,
+      "canonical": "access_key=test-vivo-access-key&format=json&method=app.sync.getappinfo&packageName=com.example.app&sign_method=HMAC-SHA256&target_app_key=developer&timestamp=1700000000000&v=1.0",
+      "signature": "bea93d5b2189739d0b614455b3046cac32377ec3e2de0bc880022c55c18b8963",
+      "signedParams": {
+        "packageName": "com.example.app",
+        "access_key": "test-vivo-access-key",
+        "timestamp": "1700000000000",
+        "method": "app.sync.getappinfo",
+        "v": "1.0",
+        "sign_method": "HMAC-SHA256",
+        "format": "json",
+        "target_app_key": "developer",
+        "sign": "bea93d5b2189739d0b614455b3046cac32377ec3e2de0bc880022c55c18b8963"
+      }
+    }
+  ],
+  "miQueryRequestData": [
+    {
+      "name": "查询-典型",
+      "account": "test@example.com",
+      "packageName": "com.example.app",
+      "requestDataJson": "{\"userName\":\"test@example.com\",\"packageName\":\"com.example.app\"}",
+      "requestDataMd5": "c1ac1bfeb48adee4ded104dc1c08e811"
+    }
+  ],
+  "miPushRequestData": [
+    {
+      "name": "推送-立即发布",
+      "account": "test@example.com",
+      "appName": "示例应用",
+      "packageName": "com.example.app",
+      "updateDesc": "修复若干问题",
+      "onlineTime": 0,
+      "requestDataJson": "{\"userName\":\"test@example.com\",\"synchroType\":1,\"appInfo\":{\"appName\":\"示例应用\",\"packageName\":\"com.example.app\",\"updateDesc\":\"修复若干问题\"}}",
+      "requestDataMd5": "fe1a2aacf0aaf491256fb98c4bbbf19d"
+    },
+    {
+      "name": "推送-定时发布",
+      "account": "test@example.com",
+      "appName": "示例应用",
+      "packageName": "com.example.app",
+      "updateDesc": "修复若干问题",
+      "onlineTime": 1767225600000,
+      "requestDataJson": "{\"userName\":\"test@example.com\",\"synchroType\":1,\"appInfo\":{\"appName\":\"示例应用\",\"packageName\":\"com.example.app\",\"updateDesc\":\"修复若干问题\",\"onlineTime\":1767225600000}}",
+      "requestDataMd5": "09a8e0eb63faaa3c72a65b36c284501f"
+    },
+    {
+      "name": "推送-中文与特殊字符",
+      "account": "test@example.com",
+      "appName": "示例&应用",
+      "packageName": "com.example.app",
+      "updateDesc": "修复 A&B \"引号\" <尖括号>",
+      "onlineTime": 0,
+      "requestDataJson": "{\"userName\":\"test@example.com\",\"synchroType\":1,\"appInfo\":{\"appName\":\"示例&应用\",\"packageName\":\"com.example.app\",\"updateDesc\":\"修复 A&B \\\"引号\\\" <尖括号>\"}}",
+      "requestDataMd5": "f4aa71881b9dd86666b317132b90b981"
+    }
+  ]
+}

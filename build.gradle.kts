@@ -32,6 +32,8 @@ subprojects {
 
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
+        // Gradle 默认不把 -D 转发给测试 JVM，黄金向量的重新生成开关需要显式传递
+        systemProperty("golden.update", System.getProperty("golden.update") ?: "false")
         testLogging {
             events("passed", "skipped", "failed")
         }

@@ -29,19 +29,55 @@ internal object VivoApiSigner {
         accessSecret: String,
         method: String,
         originParams: Map<String, String>,
-    ): Map<String, String> {
+    ): Map<String, String> = sign(accessKey, accessSecret, method, originParams, System.currentTimeMillis())
+
+    /**
+     * 同上，但 timestamp 由调用方给定。
+     *
+     * 存在的唯一理由是黄金向量测试：签名必须可复现才能跨语言逐字节比对，
+     * 而 timestamp 内部生成会让每次结果都不同。生产路径走上面那个重载。
+     */
+    internal fun sign(
+        accessKey: String,
+        accessSecret: String,
+        method: String,
+        originParams: Map<String, String>,
+        timestampMillis: Long,
+    ): Map<String, String> = signDetailed(accessKey, accessSecret, method, originParams, timestampMillis).params
+
+    /** 签名结果明细。待签串单独暴露，供黄金向量测试逐字节比对 */
+    internal data class Detailed(
+        val canonical: String,
+        val signature: String,
+        val params: Map<String, String>,
+    )
+
+    /**
+     * 同 [sign]，但同时返回待签串。
+     *
+     * 不让测试自己去拼那七个公共参数 —— 复制一份到测试里必然与生产代码漂移，
+     * 而漂移后的测试仍然会通过，等于没有保护。
+     */
+    internal fun signDetailed(
+        accessKey: String,
+        accessSecret: String,
+        method: String,
+        originParams: Map<String, String>,
+        timestampMillis: Long,
+    ): Detailed {
         val params = originParams.toMutableMap()
-        // 公共参数。timestamp 是毫秒时间戳（vivo 要求），不是秒
         params["access_key"] = accessKey
-        params["timestamp"] = System.currentTimeMillis().toString()
+        params["timestamp"] = timestampMillis.toString()
         params["method"] = method
         params["v"] = "1.0"
         params["sign_method"] = "HMAC-SHA256"
         params["format"] = "json"
         params["target_app_key"] = "developer"
         // sign 自身不参与待签串，所以必须在拼串之后才放进 map
-        params["sign"] = hmacSha256(canonicalize(params), accessSecret)
-        return params
+        val canonical = canonicalize(params)
+        val signature = hmacSha256(canonical, accessSecret)
+        params["sign"] = signature
+        return Detailed(canonical, signature, params)
     }
 
     /**
@@ -50,7 +86,7 @@ internal object VivoApiSigner {
      * value 为 null 的项跳过 —— 保留原行为，避免出现 `key=null` 这种和服务端
      * 不一致的拼法。参数值不做 URL 编码，签名针对的是原始值。
      */
-    private fun canonicalize(paramsMap: Map<String, String>): String =
+    internal fun canonicalize(paramsMap: Map<String, String>): String =
         paramsMap.keys.sorted()
             .mapNotNull { key -> paramsMap[key]?.let { "$key=$it" } }
             .joinToString("&")

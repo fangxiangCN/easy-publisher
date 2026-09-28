@@ -25,15 +25,23 @@ internal object OppoApiSigner {
      *
      * 值为 null 的参数整体跳过（连键名也不参与），同样沿用原实现的行为。
      */
-    fun sign(secret: String, params: Map<String, String?>): String {
-        val signStr = params.keys.sorted()
+    fun sign(secret: String, params: Map<String, String?>): String =
+        hmacSha256(canonicalize(params), secret)
+
+    /**
+     * 待签名串。
+     *
+     * 单独抽出来是为了黄金向量测试：跨语言重写时最容易出错的不是 HMAC 本身，
+     * 而是这个拼串规则（排序方式、null 值处理、分隔符）。把它变成可直接断言的
+     * 纯函数，才能逐字节比对。
+     */
+    internal fun canonicalize(params: Map<String, String?>): String =
+        params.keys.sorted()
             .mapNotNull { key ->
                 val value = params[key] ?: return@mapNotNull null
                 "$key=$value"
             }
             .joinToString("&")
-        return hmacSha256(signStr, secret)
-    }
 
     private fun hmacSha256(data: String, key: String): String {
         val signingKey = SecretKeySpec(key.toByteArray(StandardCharsets.UTF_8), ALGORITHM)
