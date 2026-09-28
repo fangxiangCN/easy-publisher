@@ -1,6 +1,6 @@
 package cn.fangxiang.easypublisher.core.service
 
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.Channel
 import cn.fangxiang.easypublisher.core.channel.ChannelCredentials
@@ -16,7 +16,7 @@ import cn.fangxiang.easypublisher.core.config.AppConfigStore
 import cn.fangxiang.easypublisher.core.config.LayeredCredentialStore
 import cn.fangxiang.easypublisher.core.log.AppLogger
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
-import cn.fangxiang.easypublisher.core.readApkInfo
+import cn.fangxiang.easypublisher.core.readArtifactInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -48,7 +48,7 @@ class PublishService(
      * APK 元信息读取。默认走 apk-parser，测试可注入替身 ——
      * 否则编排逻辑的测试必须先准备一个真实可解析的 APK。
      */
-    private val apkInfoReader: suspend (File) -> ApkInfo = ::readApkInfo,
+    private val artifactInfoReader: suspend (File) -> ArtifactInfo = ::readArtifactInfo,
 ) {
 
     private val jobs = ConcurrentHashMap<String, JobHandle>()
@@ -114,12 +114,19 @@ class PublishService(
      */
     suspend fun submit(
         applicationId: String,
-        apkPath: File,
+        artifactPath: File,
         releaseParams: ReleaseParams,
         channelIds: List<String>? = null,
         versionRule: PublishPolicy.VersionRule = PublishPolicy.VersionRule.Strict,
         timeouts: HttpTimeouts = HttpTimeouts.DEFAULT,
-        stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
+        /**
+         * 流程走到哪一步就停下。
+         *
+         * null 表示「走到该渠道能到的最远阶段」—— 多数渠道是送审，
+         * 但鸿蒙渠道的送审未经验证，最远只到草稿。这样默认行为对每个渠道都是
+         * 它能安全做到的最大值，而不是一律假设可以送审。
+         */
+        stopAfter: ReleaseStage? = null,
     ): String {
         val config = configStore.require(applicationId)
         val targets = resolveChannels(config, channelIds)
@@ -128,23 +135,34 @@ class PublishService(
         }
 
         // 停留点是否被支持，必须在做任何实际工作之前判定。
-        // 否则小米这类「无处可停」的渠道会先解析 APK、查完市场状态，
+        // 否则小米这类「无处可停」的渠道会先解析制品、查完市场状态，
         // 甚至开始上传，才告诉调用方这个请求根本不成立。
-        if (stopAfter != ReleaseStage.SubmitReview) {
+        if (stopAfter != null) {
             targets.forEach { it.requireSupportedStage(stopAfter) }
         }
 
-        // 预解析：任何一个渠道的 APK 缺失或配置错误都应在返回 jobId 之前暴露，
-        // 而不是留到后台执行时才失败 —— 否则调用方只能从轮询结果里发现参数写错了。
-        val plans = targets.map { channel ->
-            val file = ApkLocator.locate(apkPath, channel, config.multiChannelApk)
-            ChannelPlan(channel, file, apkInfoReader(file), credentialsFor(config, channel))
+        // 逐渠道解析出实际要走的阶段：显式指定就用它，否则取该渠道支持的最远阶段
+        val resolved: Map<String, ReleaseStage> = targets.associate { channel ->
+            channel.id to (stopAfter ?: channel.capability.supportedStages.last())
         }
 
-        val reference = plans.first().apkInfo
+        // 预解析：任何一个渠道的制品缺失或配置错误都应在返回 jobId 之前暴露，
+        // 而不是留到后台执行时才失败 —— 否则调用方只能从轮询结果里发现参数写错了。
+        val plans = targets.map { channel ->
+            val file = ArtifactLocator.locate(artifactPath, channel, config.multiChannelApk)
+            ChannelPlan(
+                channel = channel,
+                artifactFile = file,
+                artifactInfo = artifactInfoReader(file),
+                credentials = credentialsFor(config, channel),
+                stage = resolved.getValue(channel.id),
+            )
+        }
+
+        val reference = plans.first().artifactInfo
         if (reference.applicationId != config.applicationId) {
             throw PublishError.configuration(
-                "APK 的包名 ${reference.applicationId} 与配置的 ${config.applicationId} 不一致"
+                "制品的包名 ${reference.applicationId} 与配置的 ${config.applicationId} 不一致"
             )
         }
 
@@ -152,7 +170,7 @@ class PublishService(
             UploadJob(
                 id = UUID.randomUUID().toString().take(8),
                 applicationId = config.applicationId,
-                apkPath = apkPath.absolutePath,
+                artifactPath = artifactPath.absolutePath,
                 versionCode = reference.versionCode,
                 versionName = reference.versionName,
                 channels = plans.map {
@@ -165,9 +183,26 @@ class PublishService(
         jobs[handle.snapshot.id] = handle
 
         handle.job = scope.launch {
-            runUpload(handle, plans, releaseParams, versionRule, timeouts, stopAfter)
+            runUpload(handle, plans, releaseParams, versionRule, timeouts)
         }
         return handle.snapshot.id
+    }
+
+    /**
+     * 解析出每个渠道本次会走到哪一步。
+     *
+     * 用途是让调用方在动手之前就知道后果 —— 尤其是鸿蒙这类「最远只到草稿」的渠道，
+     * 以及判断这次操作是否真的包含不可撤销的送审。
+     */
+    suspend fun resolvedStages(
+        applicationId: String,
+        channelIds: List<String>? = null,
+        stopAfter: ReleaseStage? = null,
+    ): Map<String, ReleaseStage> {
+        val config = configStore.require(applicationId)
+        return resolveChannels(config, channelIds).associate { channel ->
+            channel.id to (stopAfter ?: channel.capability.supportedStages.last())
+        }
     }
 
     fun job(id: String): UploadJob? = jobs[id]?.snapshot
@@ -182,9 +217,11 @@ class PublishService(
 
     private class ChannelPlan(
         val channel: Channel,
-        val apkFile: File,
-        val apkInfo: ApkInfo,
+        val artifactFile: File,
+        val artifactInfo: ArtifactInfo,
         val credentials: ChannelCredentials,
+        /** 本渠道本次要走到哪一步，已在 submit 里解析并校验过 */
+        val stage: ReleaseStage,
     )
 
     private suspend fun runUpload(
@@ -193,11 +230,10 @@ class PublishService(
         releaseParams: ReleaseParams,
         versionRule: PublishPolicy.VersionRule,
         timeouts: HttpTimeouts,
-        stopAfter: ReleaseStage,
     ) {
         supervisorScope {
             plans.map { plan ->
-                async { uploadOne(handle, plan, releaseParams, versionRule, timeouts, stopAfter) }
+                async { uploadOne(handle, plan, releaseParams, versionRule, timeouts) }
             }.awaitAll()
         }
     }
@@ -208,9 +244,9 @@ class PublishService(
         releaseParams: ReleaseParams,
         versionRule: PublishPolicy.VersionRule,
         timeouts: HttpTimeouts,
-        stopAfter: ReleaseStage,
     ) {
         val channel = plan.channel
+        val stopAfter = plan.stage
         try {
             // 只上传安装包时不做版本号校验：此时不产生任何版本，
             // 拦截只会妨碍「验证凭据与签名是否可用」这个用途
@@ -218,18 +254,18 @@ class PublishService(
                 handle.update(channel.id, ChannelStage.Working("检查渠道状态"))
                 val marketInfo = runCatching {
                     channel.queryMarket(
-                        MarketQuery(plan.apkInfo.applicationId, plan.credentials, timeouts)
+                        MarketQuery(plan.artifactInfo.applicationId, plan.credentials, timeouts)
                     )
                 }.getOrNull()
 
-                PublishPolicy.reject(plan.apkInfo, marketInfo, versionRule)?.let { throw it }
+                PublishPolicy.reject(plan.artifactInfo, marketInfo, versionRule)?.let { throw it }
             }
 
             handle.update(channel.id, ChannelStage.Working("请求中"))
             val reached = channel.upload(
                 UploadRequest(
-                    apkFile = plan.apkFile,
-                    apkInfo = plan.apkInfo,
+                    artifactFile = plan.artifactFile,
+                    artifactInfo = plan.artifactInfo,
                     credentials = plan.credentials,
                     releaseParams = releaseParams,
                     timeouts = timeouts,
@@ -241,7 +277,7 @@ class PublishService(
             )
             // 以渠道返回的实际阶段为准，不假设请求里的 stopAfter 已达成
             handle.update(channel.id, ChannelStage.Succeeded(reached))
-            AppLogger.info(channel.displayName, "${reached.label} 完成：${plan.apkInfo}")
+            AppLogger.info(channel.displayName, "${reached.label} 完成：${plan.artifactInfo}")
         } catch (e: CancellationException) {
             // 取消必须原样向上传播，否则协程框架无法感知。
             // 原实现用 catch(Throwable) 把取消当成失败，界面显示「上传失败」并给出重试按钮，

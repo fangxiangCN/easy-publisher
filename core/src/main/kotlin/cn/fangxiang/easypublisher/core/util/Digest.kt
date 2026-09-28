@@ -23,6 +23,15 @@ object Digest {
 
     fun sha256Hex(file: File): String = hashFile(file, "SHA-256")
 
+    /**
+     * 字节数组的 SHA-256。
+     *
+     * 鸿蒙分片上传要求逐片提交摘要，分片在内存里而不是文件里，
+     * 所以需要一个接收 ByteArray 的重载。
+     */
+    fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).toHex()
+
     fun md5Hex(text: String): String =
         MessageDigest.getInstance("MD5").digest(text.toByteArray()).toHex()
 

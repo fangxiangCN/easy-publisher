@@ -2,7 +2,10 @@
 
 把 Android APK 一键提交到多个应用商店。提供 CLI 与 MCP server 两种接入方式，无图形界面。
 
-支持渠道：**华为 AppGallery、小米、OPPO、vivo、荣耀**。
+支持渠道：**华为 AppGallery、小米、OPPO、vivo、荣耀、鸿蒙 AppGallery**。
+
+其中鸿蒙渠道只做到「上传 App Pack 并关联草稿」，**不送审** —— 送审接口未经验证，
+详见[能力差异](#各渠道的能力差异)。
 
 > 本项目衍生自 [Xigong93/XiaoZhuan](https://github.com/Xigong93/XiaoZhuan)
 > （Copyright 2024 Xigong，Apache License 2.0）。原项目是一个 Compose Desktop 图形工具，
@@ -54,7 +57,11 @@ easy-publisher channel set --app com.example.app --channel mi --key publicKey --
 easy-publisher status --app com.example.app
 
 # 4. 发版
-easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修复若干问题"
+easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc "修复若干问题"
+
+# 鸿蒙（.app 包，只会创建草稿，不送审）
+easy-publisher channel set --app com.example.harmony --channel harmony --key app_id --value 123456
+easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "修复若干问题"
 ```
 
 ### 凭据
@@ -76,17 +83,18 @@ easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修�
 **这是本项目最重要的一张表。** 各商店的 API 粒度差别很大，用统一的「上传」掩盖这个差异，
 会让人误以为所有渠道都有反悔的机会。
 
-| 渠道 | 风险 | 可停在 | 撤回 |
-|---|---|---|---|
-| 华为 | 高 | 上传 / **草稿** / 送审 | 未验证 |
-| 荣耀 | 高 | 上传 / **草稿** / 送审 | 未验证 |
-| OPPO | 极高 | 上传 / 送审 | 未验证 |
-| vivo | 极高 | 上传 / 送审 | 未验证 |
-| 小米 | 极高 | 送审 | 未验证 |
+| 渠道 | 风险 | 可停在 | 撤回 | 制品 |
+|---|---|---|---|---|
+| 华为 | 高 | 上传 / **草稿** / 送审 | 未验证 | `.apk` |
+| 荣耀 | 高 | 上传 / **草稿** / 送审 | 未验证 | `.apk` |
+| OPPO | 极高 | 上传 / 送审 | 未验证 | `.apk` |
+| vivo | 极高 | 上传 / 送审 | 未验证 | `.apk` |
+| 小米 | 极高 | 送审 | 未验证 | `.apk` |
+| 鸿蒙 | 中 | 上传 / **草稿** | 无需撤回 | `.app` |
 
 - **草稿**：华为和荣耀可以先上传并绑定文件形成草稿版本，登录后台人工核对无误后再送审。
   ```bash
-  easy-publisher upload --app com.example.app --apk ./app.apk --desc "..." --stop-after draft
+  easy-publisher upload --app com.example.app --artifact ./app.apk --desc "..." --stop-after draft
   ```
 - **上传**：所有渠道（小米除外）都支持只把安装包传上去、不创建任何版本。
   用途是验证凭据、签名与文件是否被渠道接受 —— 比真发一版安全得多。
@@ -95,9 +103,17 @@ easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修�
   ```
 - **小米无处可停**：它的 `dev/push` 把上传与送审合并成一次原子请求。
   请求 `--stop-after draft` 会立即报错，而不是默默走到送审。
+- **鸿蒙不送审**：`supportedStages` 里没有「送审」这一项。请求 `--stop-after submit`
+  会立即报错。原因是鸿蒙的送审接口未经验证 —— 送审不可撤销，
+  猜错接口的代价由用户承担，所以在验证之前不声称支持。
+  当前用途是把包传到 AGC 草稿，人工核对后在网页端送审。
 - **撤回一律标为「未验证」**：上游项目的结论是各商店 API 都不提供撤销版本更新，
   但没人逐个后台确认过网页端能否撤回。「未验证」与「不支持」对使用者的含义不同，
   所以如实标注。
+
+不指定 `--stop-after` 时，各渠道走到**各自能到的最远阶段** —— 多数渠道是送审，
+鸿蒙只到草稿。MCP 的 `upload_apk` 也据此判定 `confirm`：只有本次真的包含送审时才要求，
+全部目标渠道都只走到 artifact/draft 时不需要。
 
 `easy-publisher channel list` 会输出这张表及每个渠道的说明。
 
@@ -197,7 +213,7 @@ stdout 被传输层独占：进程启动时先把真正的 fd 1 交给 transport
 easy-publisher status --app <包名> --channel huawei
 
 # 再验证文件是否被接受，不创建任何版本
-easy-publisher upload --app <包名> --apk <包> --desc x --stop-after artifact
+easy-publisher upload --app <包名> --artifact <包> --desc x --stop-after artifact
 
 # 最后再真发一个渠道
 ```
@@ -213,6 +229,14 @@ easy-publisher upload --app <包名> --apk <包> --desc x --stop-after artifact
 区分「商店资料缺失」与「接口变更」，前者会给出可执行的中文提示。
 
 **无法撤回版本。** 各商店 API 都不提供撤销版本更新的接口。
+
+**鸿蒙只能做到草稿。** 上传 App Pack 并关联到 AGC 草稿版本，送审需要人工到网页端操作。
+鸿蒙的送审接口未经验证 —— 参照实现（app-ship）同样显式拒绝非 draft 的发布类型。
+另外鸿蒙应用的 `appId` 必须显式配置，用包名反查会拿到同名 Android 应用的 id。
+
+**鸿蒙渠道未查询市场状态。** `status` 对鸿蒙会报错而不是返回猜测值：
+复用华为的 `app-info` 查到的是同名 Android 应用的记录，把它当成鸿蒙应用的状态
+报出去会误导发布决策。副作用是鸿蒙上传时跳过线上版本号比对，日志里会明确记一条。
 
 ## 与上游的差异
 
@@ -232,6 +256,10 @@ easy-publisher upload --app <包名> --apk <包> --desc x --stop-after artifact
 - 结构化错误模型，区分 7 类原因并标注失败阶段
 - 依赖升级，规避 gson 2.8.6、bcprov-jdk15on 1.62、commons-codec 1.4 的已知问题
 - Gradle Wrapper 改用官方源并校验 sha256
+- 新增鸿蒙 AppGallery 渠道（上游不支持）：`.app` 走 Upload Management API
+  分片上传 + v3 `app-package-info` 关联草稿，鉴权与华为同源因此复用其 token 模型
+- 制品抽象从 APK 专用改为按扩展名分派。`.app` 的元信息在 zip 内的 `pack.info`
+  （纯 JSON），比 APK 的二进制 AndroidManifest 简单，无需额外依赖
 
 ## License
 

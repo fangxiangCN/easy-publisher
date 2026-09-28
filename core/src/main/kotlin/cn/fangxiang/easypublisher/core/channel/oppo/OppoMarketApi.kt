@@ -1,7 +1,7 @@
 package cn.fangxiang.easypublisher.core.channel.oppo
 
 import cn.fangxiang.easypublisher.core.atSubmissionPoint
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
 import cn.fangxiang.easypublisher.core.log.AppLogger
@@ -129,7 +129,7 @@ internal class OppoMarketApi(
     suspend fun uploadApk(
         target: OppoUploadTarget,
         token: String,
-        apkFile: File,
+        artifactFile: File,
         onProgress: ProgressChange,
     ): OppoApkResult {
         val params = mapOf(
@@ -143,13 +143,13 @@ internal class OppoMarketApi(
         )
         val apkBody = ProgressBody(
             mediaType = "application/octet-stream".toMediaType(),
-            file = apkFile,
+            file = artifactFile,
             progressChange = onProgress,
         )
         val requestBody = MultipartBody.Builder()
             // 强制指定 FORM，MultipartBody 默认是 mixed，OPPO 不接受
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", apkFile.name, apkBody)
+            .addFormDataPart("file", artifactFile.name, apkBody)
             .addFormDataPart("type", "apk")
             .addFormDataPart("sign", target.sign)
             .build()
@@ -175,12 +175,12 @@ internal class OppoMarketApi(
      */
     suspend fun submit(
         token: String,
-        apkInfo: ApkInfo,
+        artifactInfo: ArtifactInfo,
         appInfo: OppoAppInfoResponse.Data,
         releaseParams: ReleaseParams,
         apkResult: OppoApkResult,
     ) {
-        val params = buildSubmitParams(apkInfo, appInfo, releaseParams, apkResult)
+        val params = buildSubmitParams(artifactInfo, appInfo, releaseParams, apkResult)
         val body = FormBody.Builder()
             .apply { params.forEach { (key, value) -> add(key, value) } }
             .build()
@@ -196,7 +196,7 @@ internal class OppoMarketApi(
     }
 
     private fun buildSubmitParams(
-        apkInfo: ApkInfo,
+        artifactInfo: ArtifactInfo,
         appInfo: OppoAppInfoResponse.Data,
         releaseParams: ReleaseParams,
         apkResult: OppoApkResult,
@@ -208,8 +208,8 @@ internal class OppoMarketApi(
 
         val required = RequiredAppFields.from(appInfo)
         val params = mutableMapOf(
-            "pkg_name" to apkInfo.applicationId,
-            "version_code" to apkInfo.versionCode.toString(),
+            "pkg_name" to artifactInfo.applicationId,
+            "version_code" to artifactInfo.versionCode.toString(),
             "apk_url" to apkUrlJson,
             "update_desc" to releaseParams.updateDesc,
             // 1 审核后立即发布，2 定时发布

@@ -1,6 +1,6 @@
 package cn.fangxiang.easypublisher.core.service
 
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
 import cn.fangxiang.easypublisher.core.channel.ReviewState
@@ -44,7 +44,7 @@ object PublishPolicy {
      * @return null 表示可以提交；否则返回拒绝原因
      */
     fun reject(
-        apkInfo: ApkInfo,
+        artifactInfo: ArtifactInfo,
         marketInfo: MarketInfo?,
         rule: VersionRule = VersionRule.Strict,
     ): PublishError? {
@@ -65,7 +65,7 @@ object PublishPolicy {
         if (rule == VersionRule.Skip) return null
 
         val online = marketInfo?.lastVersion ?: return null
-        val incoming = apkInfo.versionCode
+        val incoming = artifactInfo.versionCode
 
         return when {
             incoming > online.code -> null

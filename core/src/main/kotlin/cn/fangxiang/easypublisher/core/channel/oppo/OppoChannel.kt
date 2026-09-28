@@ -62,9 +62,9 @@ class OppoChannel : Channel {
         return oppoCall {
             val token = api.getToken()
             // 提交版本要求全量字段，必须先把商店里现有的资料读回来，见 OppoMarketApi.submit
-            val appInfo = api.getAppInfo(token, request.apkInfo.applicationId)
+            val appInfo = api.getAppInfo(token, request.artifactInfo.applicationId)
             val target = api.getUploadUrl(token)
-            val apkResult = api.uploadApk(target, token, request.apkFile, request.onProgress)
+            val apkResult = api.uploadApk(target, token, request.artifactFile, request.onProgress)
             if (request.stopAfter == ReleaseStage.UploadArtifact) {
                 // OPPO 没有草稿态，停在这里只能证明凭据、签名与文件被接受，
                 // 不会在后台留下任何可查看的版本
@@ -74,11 +74,11 @@ class OppoChannel : Channel {
                 )
                 return@oppoCall ReleaseStage.UploadArtifact
             }
-            api.submit(token, request.apkInfo, appInfo, request.releaseParams, apkResult)
+            api.submit(token, request.artifactInfo, appInfo, request.releaseParams, apkResult)
             AppLogger.info(
                 LOG_TAG,
-                "已提交新版本：${request.apkInfo.applicationId} ${request.apkInfo.versionName}" +
-                    "(${request.apkInfo.versionCode})",
+                "已提交新版本：${request.artifactInfo.applicationId} ${request.artifactInfo.versionName}" +
+                    "(${request.artifactInfo.versionCode})",
             )
             ReleaseStage.SubmitReview
         }

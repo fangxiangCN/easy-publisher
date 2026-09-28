@@ -48,8 +48,8 @@ class HuaweiChannel : Channel {
     override suspend fun upload(request: UploadRequest): ReleaseStage {
         requireSupportedStage(request.stopAfter)
         return client.uploadApk(
-            file = request.apkFile,
-            apkInfo = request.apkInfo,
+            file = request.artifactFile,
+            artifactInfo = request.artifactInfo,
             clientId = request.credentials["client_id"],
             clientSecret = request.credentials["client_secret"],
             releaseParams = request.releaseParams,

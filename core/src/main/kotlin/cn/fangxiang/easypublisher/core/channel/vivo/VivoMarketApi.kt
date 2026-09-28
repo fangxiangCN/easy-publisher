@@ -49,11 +49,11 @@ internal class VivoMarketApi(
     }
 
     suspend fun uploadApk(
-        apkFile: File,
+        artifactFile: File,
         packageName: String,
         progressChange: ProgressChange,
     ): VivoUploadResult {
-        val fileMd5 = md5Of(apkFile)
+        val fileMd5 = md5Of(artifactFile)
         // fileMd5 参与签名，因此必须在构造 URL 之前算好
         val params = mapOf(
             "packageName" to packageName,
@@ -61,11 +61,11 @@ internal class VivoMarketApi(
         )
         val apkBody = ProgressBody(
             mediaType = "application/octet-stream".toMediaType(),
-            file = apkFile,
+            file = artifactFile,
             progressChange = progressChange,
         )
         val requestBody = MultipartBody.Builder()
-            .addFormDataPart("file", apkFile.name, apkBody)
+            .addFormDataPart("file", artifactFile.name, apkBody)
             .build()
         val url = signedUrl("app.upload.apk.app", params)
         val request = Request.Builder().url(url).post(requestBody).build()
@@ -111,13 +111,13 @@ internal class VivoMarketApi(
         }
     }
 
-    private suspend fun md5Of(apkFile: File): String = withContext(Dispatchers.IO) {
+    private suspend fun md5Of(artifactFile: File): String = withContext(Dispatchers.IO) {
         try {
-            Digest.md5Hex(apkFile)
+            Digest.md5Hex(artifactFile)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw PublishError.localFile("计算 APK 的 MD5 失败：${apkFile.absolutePath}", e)
+            throw PublishError.localFile("计算 APK 的 MD5 失败：${artifactFile.absolutePath}", e)
         }
     }
 

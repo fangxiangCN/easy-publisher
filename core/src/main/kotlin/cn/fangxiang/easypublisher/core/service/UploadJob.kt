@@ -97,12 +97,18 @@ enum class JobState { Running, Succeeded, PartiallyFailed, Failed, Cancelled }
 data class UploadJob(
     val id: String,
     val applicationId: String,
-    val apkPath: String,
+    val artifactPath: String,
     val versionCode: Long,
     val versionName: String,
     val channels: List<ChannelProgress>,
-    /** 本次请求希望停在哪一步。实际到达的阶段见各渠道的 [ChannelStage.Succeeded] */
-    val requestedStage: ReleaseStage = ReleaseStage.SubmitReview,
+    /**
+     * 调用方显式请求的停留点。
+     *
+     * null 表示「各渠道走到各自能到的最远阶段」。此时不同渠道的目标阶段可能不同
+     * （例如同时发华为与鸿蒙：华为走到送审，鸿蒙只到草稿），
+     * 所以无法用一个 job 级的值概括 —— 每个渠道实际到达的阶段见 [ChannelStage.Succeeded]。
+     */
+    val requestedStage: ReleaseStage? = null,
     val startedAt: Long,
     val finishedAt: Long? = null,
 ) {

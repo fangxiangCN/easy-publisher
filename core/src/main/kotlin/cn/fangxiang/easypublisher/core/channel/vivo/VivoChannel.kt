@@ -56,7 +56,7 @@ class VivoChannel : Channel {
     override suspend fun upload(request: UploadRequest): ReleaseStage {
         requireSupportedStage(request.stopAfter)
         val api = api(request.credentials, request.timeouts)
-        val packageName = request.apkInfo.applicationId
+        val packageName = request.artifactInfo.applicationId
 
         // 保持原实现的请求顺序：先查详情再上传。查询会提前暴露包名不属于本账号、
         // 凭据失效这类问题，避免白传一个上百兆的包才失败。
@@ -68,7 +68,7 @@ class VivoChannel : Channel {
         )
 
         val uploadResult = step("上传 APK") {
-            api.uploadApk(request.apkFile, packageName, request.onProgress)
+            api.uploadApk(request.artifactFile, packageName, request.onProgress)
         }
         if (request.stopAfter == ReleaseStage.UploadArtifact) {
             // vivo 同样没有草稿态：停在这里只证明文件与签名被接受

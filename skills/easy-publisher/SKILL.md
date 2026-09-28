@@ -21,11 +21,12 @@ description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五�
 
 **发版前先搞清楚这个。** 各商店 API 粒度差别很大：
 
-| 渠道 | 可停在 | 风险 |
-|---|---|---|
-| 华为 / 荣耀 | `artifact` / `draft` / `submit` | 高 |
-| OPPO / vivo | `artifact` / `submit`（无草稿态） | 极高 |
-| 小米 | 仅 `submit`（`dev/push` 是原子请求） | 极高 |
+| 渠道 | 可停在 | 风险 | 制品 |
+|---|---|---|---|
+| 华为 / 荣耀 | `artifact` / `draft` / `submit` | 高 | `.apk` |
+| OPPO / vivo | `artifact` / `submit`（无草稿态） | 极高 | `.apk` |
+| 小米 | 仅 `submit`（`dev/push` 是原子请求） | 极高 | `.apk` |
+| 鸿蒙 | `artifact` / `draft`（**不能送审**） | 中 | `.app` |
 
 `--stop-after` 三档：
 
@@ -36,15 +37,21 @@ description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五�
 
 请求某渠道不支持的停留点会**立即报错**，不会默默走到送审。
 
+不指定 `--stop-after` 时，各渠道走到各自能到的最远阶段。
+
+**鸿蒙特别说明**：只能创建草稿，送审必须人工到 AGC 网页端操作。它的 `app_id`
+要单独配置（与同名 Android 应用不是同一个 id），且 `status` 对鸿蒙会报错 ——
+不要试图用华为渠道的状态推断鸿蒙应用的状态。
+
 ## 首次使用某个渠道时
 
 按这个顺序验证，每一步都比上一步风险高：
 
 ```bash
 easy-publisher status --app <包名> --channel <渠道>          # 只读，验证鉴权链路
-easy-publisher upload --app <包名> --apk <包> --desc x --stop-after artifact   # 验证文件被接受
-easy-publisher upload --app <包名> --apk <包> --desc x --stop-after draft      # 若支持草稿
-easy-publisher upload --app <包名> --apk <包> --desc x       # 真发版
+easy-publisher upload --app <包名> --artifact <包> --desc x --stop-after artifact   # 验证文件被接受
+easy-publisher upload --app <包名> --artifact <包> --desc x --stop-after draft      # 若支持草稿
+easy-publisher upload --app <包名> --artifact <包> --desc x       # 真发版
 ```
 
 第一步就能验证凭据、签名算法、响应解析三环是否都通 —— 这三样是发版能否成功的
@@ -88,7 +95,7 @@ easy-publisher channel list --app com.example.app    # 显示各参数是否已�
 ### 发版
 
 ```bash
-easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修复若干问题"
+easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc "修复若干问题"
 ```
 
 默认等待全部渠道完成并在 stderr 显示进度。常用选项：
@@ -100,8 +107,10 @@ easy-publisher upload --app com.example.app --apk ./app-release.apk --desc "修�
 | `--online-time "2026-01-15 10:00:00"` | 定时上线，不填则审核通过后立即发布 |
 | `--timeout 300` | 单次请求超时秒数。vivo 大包可能需要调大 |
 
-多渠道包（每个渠道一个 APK）：`--apk` 传目录，工具按文件名里的渠道标识匹配
-（如 `app-HUAWEI-1.2.0.apk`）。需要先给应用加 `--multi-channel-apk`。
+多渠道包（每个渠道一个包）：`--artifact` 传目录（`--apk` / `--file` 是等价别名），
+工具按文件名里的渠道标识匹配（如 `app-HUAWEI-1.2.0.apk`、`app-HARMONY-1.2.0.app`）。
+需要先给应用加 `--multi-channel-apk`。扩展名不被目标渠道接受时会立即报错 ——
+把 `.apk` 传给鸿蒙渠道不会等到上传几百兆之后才失败。
 
 ## 退出码
 

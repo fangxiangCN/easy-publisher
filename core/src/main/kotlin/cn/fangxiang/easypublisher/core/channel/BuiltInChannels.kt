@@ -1,5 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel
 
+import cn.fangxiang.easypublisher.core.channel.harmony.HarmonyChannel
 import cn.fangxiang.easypublisher.core.channel.honor.HonorChannel
 import cn.fangxiang.easypublisher.core.channel.huawei.HuaweiChannel
 import cn.fangxiang.easypublisher.core.channel.mi.MiChannel
@@ -18,4 +19,5 @@ internal fun builtIn(): List<Channel> = listOf(
     OppoChannel(),
     VivoChannel(),
     HonorChannel(),
+    HarmonyChannel(),
 )

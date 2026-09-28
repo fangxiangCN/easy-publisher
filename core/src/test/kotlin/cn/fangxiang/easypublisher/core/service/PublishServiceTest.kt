@@ -1,6 +1,6 @@
 package cn.fangxiang.easypublisher.core.service
 
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.FailurePhase
 import cn.fangxiang.easypublisher.core.PublishError
@@ -42,11 +42,11 @@ class PublishServiceTest {
 
     private val store = AppConfigStore(File(tempDir, "apps"))
 
-    /** 假装是个 APK；apkInfoReader 被注入替身，不会真的去解析 */
-    private val apkFile = File(tempDir, "app-1.0.0.apk").apply { writeText("not really an apk") }
+    /** 假装是个 APK；artifactInfoReader 被注入替身，不会真的去解析 */
+    private val artifactFile = File(tempDir, "app-1.0.0.apk").apply { writeText("not really an apk") }
 
-    private val fakeApkInfo = ApkInfo(
-        path = apkFile.absolutePath,
+    private val fakeArtifactInfo = ArtifactInfo(
+        path = artifactFile.absolutePath,
         applicationId = APP_ID,
         versionCode = 10,
         versionName = "1.0.0",
@@ -124,9 +124,9 @@ class PublishServiceTest {
         seedConfig("huawei")
         // 渠道声称只走到上传，即使请求的是送审 —— service 必须如实记录
         val channel = FakeChannel("huawei", reached = ReleaseStage.UploadArtifact)
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
-        val jobId = svc.submit(APP_ID, apkFile, ReleaseParams("测试"))
+        val jobId = svc.submit(APP_ID, artifactFile, ReleaseParams("测试"))
         advanceUntilIdle()
 
         val job = assertNotNull(svc.job(jobId))
@@ -140,10 +140,10 @@ class PublishServiceTest {
     fun `停在草稿态时不显示为已提交`() = runTest {
         seedConfig("honor")
         val channel = FakeChannel("honor")
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
         val jobId = svc.submit(
-            APP_ID, apkFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft,
+            APP_ID, artifactFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft,
         )
         advanceUntilIdle()
 
@@ -161,10 +161,10 @@ class PublishServiceTest {
         seedConfig("huawei")
         // 线上版本 100 高于待提交的 10，正常送审会被拦；但只上传文件不产生版本，不该拦
         val channel = FakeChannel("huawei", market = onlineVersion(100))
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
         val jobId = svc.submit(
-            APP_ID, apkFile, ReleaseParams("测试"), stopAfter = ReleaseStage.UploadArtifact,
+            APP_ID, artifactFile, ReleaseParams("测试"), stopAfter = ReleaseStage.UploadArtifact,
         )
         advanceUntilIdle()
 
@@ -180,10 +180,10 @@ class PublishServiceTest {
     fun `停在草稿态时仍执行版本号校验`() = runTest {
         seedConfig("huawei")
         val channel = FakeChannel("huawei", market = onlineVersion(100))
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
         val jobId = svc.submit(
-            APP_ID, apkFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft,
+            APP_ID, artifactFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft,
         )
         advanceUntilIdle()
 
@@ -202,9 +202,9 @@ class PublishServiceTest {
             "mi", failure = PublishError.rejected("mi", "131004", "版本号已存在"),
         )
         val ok = FakeChannel("huawei")
-        val svc = PublishService(store, this, listOf(failing, ok)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(failing, ok)) { fakeArtifactInfo }
 
-        val jobId = svc.submit(APP_ID, apkFile, ReleaseParams("测试"))
+        val jobId = svc.submit(APP_ID, artifactFile, ReleaseParams("测试"))
         advanceUntilIdle()
 
         val job = assertNotNull(svc.job(jobId))
@@ -224,9 +224,9 @@ class PublishServiceTest {
                 .fromNetwork("huawei", SocketTimeoutException("read timeout"))
                 .atSubmissionPoint("华为", "提交审核"),
         )
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
-        val jobId = svc.submit(APP_ID, apkFile, ReleaseParams("测试"))
+        val jobId = svc.submit(APP_ID, artifactFile, ReleaseParams("测试"))
         advanceUntilIdle()
 
         val stage = assertNotNull(svc.job(jobId)).channels.single().stage
@@ -240,9 +240,9 @@ class PublishServiceTest {
     fun `送审前的网络失败仍可重试`() = runTest {
         seedConfig("huawei")
         val channel = FakeChannel("huawei", failure = PublishError.fromNetwork("huawei", SocketTimeoutException()))
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
-        val jobId = svc.submit(APP_ID, apkFile, ReleaseParams("测试"))
+        val jobId = svc.submit(APP_ID, artifactFile, ReleaseParams("测试"))
         advanceUntilIdle()
 
         val stage = assertNotNull(svc.job(jobId)).channels.single().stage as ChannelStage.Failed
@@ -255,11 +255,11 @@ class PublishServiceTest {
     @Test
     fun `APK 包名与配置不一致时在返回 jobId 之前失败`() = runTest {
         seedConfig("huawei")
-        val mismatched = fakeApkInfo.copy(applicationId = "com.other.app")
+        val mismatched = fakeArtifactInfo.copy(applicationId = "com.other.app")
         val svc = PublishService(store, this, listOf(FakeChannel("huawei"))) { mismatched }
 
         val error = assertFailsWith<PublishError> {
-            svc.submit(APP_ID, apkFile, ReleaseParams("测试"))
+            svc.submit(APP_ID, artifactFile, ReleaseParams("测试"))
         }
         assertEquals(ErrorKind.Configuration, error.kind)
         assertTrue(error.message!!.contains("com.other.app"))
@@ -268,10 +268,10 @@ class PublishServiceTest {
     @Test
     fun `请求未配置的渠道时快速失败`() = runTest {
         seedConfig("huawei")
-        val svc = PublishService(store, this, listOf(FakeChannel("huawei"))) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(FakeChannel("huawei"))) { fakeArtifactInfo }
 
         val error = assertFailsWith<PublishError> {
-            svc.submit(APP_ID, apkFile, ReleaseParams("测试"), channelIds = listOf("vivo"))
+            svc.submit(APP_ID, artifactFile, ReleaseParams("测试"), channelIds = listOf("vivo"))
         }
         assertEquals(ErrorKind.Configuration, error.kind)
     }
@@ -291,10 +291,10 @@ class PublishServiceTest {
                 note = "dev/push 原子请求，无处可停",
             ),
         )
-        val svc = PublishService(store, this, listOf(channel)) { fakeApkInfo }
+        val svc = PublishService(store, this, listOf(channel)) { fakeArtifactInfo }
 
         val error = assertFailsWith<PublishError> {
-            svc.submit(APP_ID, apkFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft)
+            svc.submit(APP_ID, artifactFile, ReleaseParams("测试"), stopAfter = ReleaseStage.CreateDraft)
         }
         assertEquals(ErrorKind.Configuration, error.kind)
         assertEquals(0, channel.uploadCalls, "不该发起任何上传")

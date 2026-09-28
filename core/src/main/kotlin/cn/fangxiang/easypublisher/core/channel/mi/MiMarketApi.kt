@@ -69,7 +69,7 @@ internal class MiMarketApi {
         account: String,
         certificate: String,
         password: String,
-        apkFile: File,
+        artifactFile: File,
         packageInfo: MiPackageInfo,
         updateDesc: String,
         onlineTime: Long,
@@ -95,12 +95,12 @@ internal class MiMarketApi {
             items = listOf(
                 MiSigPayload.Item(name = "RequestData", hash = Digest.md5Hex(requestData)),
                 // apk 的 MD5 同样是小米规定的完整性字段，不是安全签名
-                MiSigPayload.Item(name = "apk", hash = Digest.md5Hex(apkFile)),
+                MiSigPayload.Item(name = "apk", hash = Digest.md5Hex(artifactFile)),
             ),
         )
         val apkBody = ProgressBody(
             mediaType = APK_MEDIA_TYPE.toMediaType(),
-            file = apkFile,
+            file = artifactFile,
             progressChange = progressChange,
         )
         // apk 的 part 文件名是空串：原实现如此，小米服务端按 part 名 "apk" 取文件，

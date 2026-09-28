@@ -8,7 +8,7 @@ import cn.fangxiang.easypublisher.core.channel.ReleaseParams
 import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.config.EnvCredentialStore
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
-import cn.fangxiang.easypublisher.core.readApkInfo
+import cn.fangxiang.easypublisher.core.readArtifactInfo
 import cn.fangxiang.easypublisher.core.service.ChannelStage
 import cn.fangxiang.easypublisher.core.service.JobState
 import cn.fangxiang.easypublisher.core.service.PublishPolicy
@@ -228,50 +228,50 @@ private fun Server.registerCheckRelease(service: PublishService) = addTool(
     """.trimIndent(),
     inputSchema = Schema.obj(
         "applicationId" to Schema.string("包名"),
-        "apkPath" to Schema.string("APK 文件路径，或存放多渠道包的目录"),
+        "artifactPath" to Schema.string("APK 文件路径，或存放多渠道包的目录"),
         "channels" to Schema.stringArray("只检查指定渠道；省略则检查全部已启用渠道"),
         "allowSameVersion" to Schema.boolean("允许版本号与线上相同", default = false),
-        required = listOf("applicationId", "apkPath"),
+        required = listOf("applicationId", "artifactPath"),
     ),
     toolAnnotations = ToolAnnotations(readOnlyHint = true, openWorldHint = true),
 ) { request ->
     guarded {
         val applicationId = request.requireString("applicationId").let(ApplicationId::validate)
-        val apkFile = request.requireFile("apkPath")
+        val artifactFile = request.requireFile("artifactPath")
         val rule = if (request.boolean("allowSameVersion") == true) {
             PublishPolicy.VersionRule.AllowSame
         } else {
             PublishPolicy.VersionRule.Strict
         }
 
-        val apkInfo = if (apkFile.isFile) readApkInfo(apkFile) else null
+        val artifactInfo = if (artifactFile.isFile) readArtifactInfo(artifactFile) else null
         val states = service.marketStates(applicationId, request.stringList("channels"))
 
         var blocked = 0
         val payload = buildJsonObject {
             put("ok", true)
             put("applicationId", applicationId)
-            if (apkInfo != null) {
+            if (artifactInfo != null) {
                 putJsonObject("apk") {
-                    put("path", apkInfo.path)
-                    put("applicationId", apkInfo.applicationId)
-                    put("versionCode", apkInfo.versionCode)
-                    put("versionName", apkInfo.versionName)
-                    put("sizeBytes", apkInfo.sizeBytes)
+                    put("path", artifactInfo.path)
+                    put("applicationId", artifactInfo.applicationId)
+                    put("versionCode", artifactInfo.versionCode)
+                    put("versionName", artifactInfo.versionName)
+                    put("sizeBytes", artifactInfo.sizeBytes)
                 }
-                if (apkInfo.applicationId != applicationId) {
+                if (artifactInfo.applicationId != applicationId) {
                     put(
                         "warning",
-                        "APK 的包名 ${apkInfo.applicationId} 与配置的 $applicationId 不一致",
+                        "APK 的包名 ${artifactInfo.applicationId} 与配置的 $applicationId 不一致",
                     )
                 }
             } else {
-                put("note", "apkPath 是目录，将按渠道标识匹配多渠道包，此处不逐个解析")
+                put("note", "artifactPath 是目录，将按渠道标识匹配多渠道包，此处不逐个解析")
             }
             putJsonArray("channels") {
                 states.forEach { (id, result) ->
                     val marketInfo = result.getOrNull()
-                    val rejection = apkInfo?.let { PublishPolicy.reject(it, marketInfo, rule) }
+                    val rejection = artifactInfo?.let { PublishPolicy.reject(it, marketInfo, rule) }
                     if (rejection != null) blocked++
                     add(
                         buildJsonObject {
@@ -325,20 +325,22 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
     """.trimIndent(),
     inputSchema = Schema.obj(
         "applicationId" to Schema.string("包名"),
-        "apkPath" to Schema.string("APK 文件路径，或存放多渠道包的目录"),
+        "artifactPath" to Schema.string("APK 文件路径，或存放多渠道包的目录"),
         "updateDesc" to Schema.string("更新说明，会提交给商店审核"),
         "stopAfter" to Schema.string(
             "流程走到哪一步就停下。artifact=仅上传安装包，不创建任何版本，" +
                 "可用于验证凭据与签名是否可用；draft=停在草稿态，可先到渠道后台核对再送审；" +
-                "submit=一路走到送审（默认）。注意：并非所有渠道都支持中途停下，" +
-                "小米的 dev/push 是原子请求只能 submit，OPPO/vivo 没有草稿态只支持 artifact 或 submit。" +
+                "submit=一路走到送审。不指定则各渠道走到各自能到的最远阶段 —— " +
+                "多数渠道是送审，鸿蒙因送审未经验证只到草稿。" +
+                "注意：并非所有渠道都支持中途停下，小米的 dev/push 是原子请求只能 submit，" +
+                "OPPO/vivo 没有草稿态只支持 artifact 或 submit，鸿蒙不支持 submit。" +
                 "调用前请先看 list_channels 返回的 capability.supportedStages",
             enum = listOf("artifact", "draft", "submit"),
         ),
         "confirm" to Schema.boolean(
-            "当 stopAfter 为 submit（或未指定）时必须为 true。" +
-                "确认理解送审不可撤销，将向正式渠道提交版本。" +
-                "停在 artifact 或 draft 时不需要此参数",
+            "当本次操作包含送审时必须为 true（stopAfter=submit，或未指定 stopAfter " +
+                "且目标渠道里有能送审的）。确认理解送审不可撤销，将向正式渠道提交版本。" +
+                "若所有目标渠道都只走到 artifact 或 draft，则不需要此参数",
             default = false,
         ),
         "channels" to Schema.stringArray("只发指定渠道；省略则发全部已启用渠道"),
@@ -351,7 +353,7 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
         // confirm 不放进 required：它只在真的要送审时才必需，
         // 停在 artifact/draft 是安全操作，不该被同一个门槛拦住。
         // JSON Schema 表达不了这种条件依赖，改在代码里校验并给出明确原因。
-        required = listOf("applicationId", "apkPath", "updateDesc"),
+        required = listOf("applicationId", "artifactPath", "updateDesc"),
     ),
     toolAnnotations = ToolAnnotations(
         readOnlyHint = false,
@@ -364,14 +366,27 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
         val stage = when (request.string("stopAfter")) {
             "artifact" -> ReleaseStage.UploadArtifact
             "draft" -> ReleaseStage.CreateDraft
-            null, "submit" -> ReleaseStage.SubmitReview
+            "submit" -> ReleaseStage.SubmitReview
+            // 未指定：各渠道走到各自能到的最远阶段
+            null -> null
             else -> throw PublishError.configuration(
                 "stopAfter 只能是 artifact / draft / submit"
             )
         }
         // 只有真的要送审时才要求确认。停在送审之前不产生不可撤销的副作用，
         // 强行要求 confirm 只会训练调用方无脑传 true，反而削弱这道门槛的意义。
-        if (stage == ReleaseStage.SubmitReview && request.boolean("confirm") != true) {
+        //
+        // stage 为 null（未指定）时要按渠道解析：鸿蒙最远只到草稿，
+        // 若本次目标里没有任何渠道会真的送审，就不该索要 confirm。
+        val resolved = service.resolvedStages(
+            applicationId = request.requireString("applicationId").let {
+                cn.fangxiang.easypublisher.core.ApplicationId.validate(it)
+            },
+            channelIds = request.stringList("channels"),
+            stopAfter = stage,
+        )
+        val willSubmit = resolved.values.any { it == ReleaseStage.SubmitReview }
+        if (willSubmit && request.boolean("confirm") != true) {
             throw PublishError.configuration(
                 "送审需要显式传 confirm=true。此操作会向应用商店提交正式版本，" +
                     "且各商店均不提供撤销 API。建议先用 check_release 预检；" +
@@ -381,7 +396,7 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
         val applicationId = request.requireString("applicationId").let(ApplicationId::validate)
         val jobId = service.submit(
             applicationId = applicationId,
-            apkPath = request.requireFile("apkPath"),
+            artifactPath = request.requireFile("artifactPath"),
             releaseParams = ReleaseParams(
                 updateDesc = request.requireString("updateDesc"),
                 onlineTime = request.string("onlineTime")?.let(::parseOnlineTime) ?: 0L,
@@ -404,14 +419,16 @@ private fun Server.registerUploadApk(service: PublishService) = addTool(
                 putJsonArray("channels") {
                     job?.channels?.forEach { add(it.channelId) }
                 }
-                put("requestedStage", stage.name)
+                resolved.forEach { (channelId, resolvedStage) ->
+                    put("stage_$channelId", resolvedStage.name)
+                }
                 put(
                     "note",
-                    if (stage == ReleaseStage.SubmitReview) {
+                    if (willSubmit) {
                         "用 get_upload_status 轮询进度。上传大包可能需要数分钟到数十分钟。"
                     } else {
-                        "已请求停在「${stage.label}」。用 get_upload_status 轮询；" +
-                            "完成后各渠道的 state 会显示实际到达的阶段。"
+                        "本次不含送审。用 get_upload_status 轮询；" +
+                            "完成后各渠道的 reachedStage 会显示实际到达的阶段。"
                     },
                 )
             }
@@ -446,7 +463,9 @@ private fun Server.registerGetUploadStatus(service: PublishService) = addTool(
                 put("applicationId", job.applicationId)
                 put("versionCode", job.versionCode)
                 put("versionName", job.versionName)
-                put("requestedStage", job.requestedStage.name)
+                // null 表示「各渠道走到各自能到的最远阶段」（鸿蒙止于草稿，其余到送审），
+                // 此时没有统一的请求阶段；每个渠道实际到达的阶段见 reachedStage
+                put("requestedStage", job.requestedStage?.name)
                 putJsonArray("channels") {
                     job.channels.forEach { progress ->
                         add(

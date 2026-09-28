@@ -20,23 +20,37 @@ class ChannelCapabilityTest {
     private val channels = ChannelRegistry.all()
 
     @Test
-    fun `注册了五个渠道`() {
+    fun `注册了六个渠道`() {
         assertEquals(
-            listOf("huawei", "mi", "oppo", "vivo", "honor"),
+            listOf("huawei", "mi", "oppo", "vivo", "honor", "harmony"),
             channels.map { it.id },
         )
     }
 
+    /**
+     * 不是所有渠道都能送审。
+     *
+     * 鸿蒙的送审接口未经验证，因此它的阶段列表**不含** SubmitReview ——
+     * 这不是遗漏，而是刻意不声称支持一个没人验证过的不可撤销操作。
+     */
     @Test
-    fun `每个渠道都以送审作为最后一个阶段`() {
+    fun `能送审的渠道以送审结尾，鸿蒙则止于草稿`() {
         channels.forEach { channel ->
             val stages = channel.capability.supportedStages
             assertTrue(stages.isNotEmpty(), "${channel.id} 未声明任何阶段")
-            assertEquals(
-                ReleaseStage.SubmitReview,
-                stages.last(),
-                "${channel.id} 的阶段列表必须以 SubmitReview 结尾",
-            )
+            if (channel.id == "harmony") {
+                assertFalse(
+                    stages.contains(ReleaseStage.SubmitReview),
+                    "鸿蒙送审未经验证，不应声称支持",
+                )
+                assertEquals(ReleaseStage.CreateDraft, stages.last())
+            } else {
+                assertEquals(
+                    ReleaseStage.SubmitReview,
+                    stages.last(),
+                    "${channel.id} 的阶段列表必须以 SubmitReview 结尾",
+                )
+            }
         }
     }
 
@@ -76,6 +90,12 @@ class ChannelCapabilityTest {
         }
     }
 
+    @Test
+    fun `只有鸿蒙不能送审`() {
+        val cannotSubmit = channels.filter { !it.capability.supports(ReleaseStage.SubmitReview) }
+        assertEquals(listOf("harmony"), cannotSubmit.map { it.id })
+    }
+
     /**
      * 诚实性守卫。
      *
@@ -99,16 +119,25 @@ class ChannelCapabilityTest {
     }
 
     @Test
-    fun `撤回能力一律标为未验证`() {
+    fun `可送审渠道的撤回能力标为未验证`() {
         // 上游 issue 的结论是「各商店 API 都不提供撤销」，但没人逐个后台确认过，
         // 所以是 NotVerified 而不是 Unsupported —— 这两者对使用者的含义不同
-        channels.forEach { channel ->
+        channels.filter { it.capability.supports(ReleaseStage.SubmitReview) }.forEach { channel ->
             assertEquals(
                 Withdrawal.NotVerified,
                 channel.capability.withdrawal,
                 "${channel.id} 的撤回能力未经验证，不应声称支持或不支持",
             )
         }
+    }
+
+    @Test
+    fun `鸿蒙的撤回标为无需撤回`() {
+        // 只做到草稿，不送审就不会上架，因此没有需要撤回的东西
+        assertEquals(
+            Withdrawal.NotApplicable,
+            ChannelRegistry.require("harmony").capability.withdrawal,
+        )
     }
 
     // ---- 各渠道的粒度差异 ----
@@ -177,7 +206,42 @@ class ChannelCapabilityTest {
     fun `支持的停留点通过校验`() {
         ChannelRegistry.require("huawei").requireSupportedStage(ReleaseStage.CreateDraft)
         ChannelRegistry.require("oppo").requireSupportedStage(ReleaseStage.UploadArtifact)
-        channels.forEach { it.requireSupportedStage(ReleaseStage.SubmitReview) }
+        ChannelRegistry.require("harmony").requireSupportedStage(ReleaseStage.CreateDraft)
+        // 能送审的渠道都应当接受 SubmitReview
+        channels.filter { it.capability.supports(ReleaseStage.SubmitReview) }
+            .forEach { it.requireSupportedStage(ReleaseStage.SubmitReview) }
+    }
+
+    @Test
+    fun `请求鸿蒙送审时报错而不是默默上传`() {
+        val error = assertFailsWith<PublishError> {
+            ChannelRegistry.require("harmony").requireSupportedStage(ReleaseStage.SubmitReview)
+        }
+        assertEquals(ErrorKind.Configuration, error.kind)
+        assertTrue(
+            error.message!!.contains("草稿"),
+            "应当告知可停在草稿态：${error.message}",
+        )
+    }
+
+    // ---- 鸿蒙渠道特有约束 ----
+
+    @Test
+    fun `鸿蒙只接受 app 格式`() {
+        val harmony = ChannelRegistry.require("harmony")
+        assertEquals(listOf("app"), harmony.artifactExtensions)
+        // 其余渠道仍是 apk，默认值不该被改动
+        channels.filter { it.id != "harmony" }.forEach { channel ->
+            assertEquals(listOf("apk"), channel.artifactExtensions, "${channel.id} 的制品类型变了")
+        }
+    }
+
+    @Test
+    fun `鸿蒙要求显式配置 appId`() {
+        // 鸿蒙应用在 AGC 里是独立记录，用包名反查会拿到 Android 应用的 id
+        val names = ChannelRegistry.require("harmony").params.map { it.name }
+        assertTrue("app_id" in names, "鸿蒙必须要求显式配置 app_id，实际：$names")
+        assertTrue("client_id" in names && "client_secret" in names)
     }
 
     @Test

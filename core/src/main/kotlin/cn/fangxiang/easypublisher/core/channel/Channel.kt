@@ -1,6 +1,6 @@
 package cn.fangxiang.easypublisher.core.channel
 
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
 import cn.fangxiang.easypublisher.core.net.ProgressChange
 import java.io.File
@@ -59,8 +59,8 @@ class ChannelCredentials(private val values: Map<String, String>) {
  * 此处把凭据与回调都变成方法入参，渠道实现无状态、可安全并发复用。
  */
 data class UploadRequest(
-    val apkFile: File,
-    val apkInfo: ApkInfo,
+    val artifactFile: File,
+    val artifactInfo: ArtifactInfo,
     val credentials: ChannelCredentials,
     val releaseParams: ReleaseParams,
     val timeouts: HttpTimeouts = HttpTimeouts.DEFAULT,
@@ -110,6 +110,15 @@ interface Channel {
      * 用统一的「upload」掩盖这个差异，会让人误以为所有渠道都有反悔的机会。
      */
     val capability: ChannelCapability
+
+    /**
+     * 本渠道接受的制品文件扩展名（不含点）。
+     *
+     * 默认 APK。鸿蒙渠道覆盖为 `app` —— 它的发布包是 App Pack，
+     * 上传接口与关联草稿的方式都与 APK 不同。
+     */
+    val artifactExtensions: List<String>
+        get() = cn.fangxiang.easypublisher.core.ArtifactKind.Apk.extensions
 
     /**
      * 上传，并按 [UploadRequest.stopAfter] 决定是否送审。

@@ -1,6 +1,6 @@
 package cn.fangxiang.easypublisher.core.service
 
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
 import cn.fangxiang.easypublisher.core.channel.ReviewState
@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 
 class PublishPolicyTest {
 
-    private fun apk(versionCode: Long) = ApkInfo(
+    private fun apk(versionCode: Long) = ArtifactInfo(
         path = "/tmp/app.apk",
         applicationId = "com.example.app",
         versionCode = versionCode,

@@ -2,7 +2,7 @@ package cn.fangxiang.easypublisher.core.channel.honor
 
 import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.atSubmissionPoint
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.ReleaseParams
 import cn.fangxiang.easypublisher.core.log.AppLogger
@@ -52,16 +52,16 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
      */
     suspend fun uploadApk(
         file: File,
-        apkInfo: ApkInfo,
+        artifactInfo: ArtifactInfo,
         clientId: String,
         clientSecret: String,
         releaseParams: ReleaseParams,
         progressChange: ProgressChange,
         stopAfter: ReleaseStage = ReleaseStage.SubmitReview,
     ): ReleaseStage {
-        AppLogger.info(LOG_TAG, "开始提交新版本：${apkInfo.applicationId} ${apkInfo.versionName}")
+        AppLogger.info(LOG_TAG, "开始提交新版本：${artifactInfo.applicationId} ${artifactInfo.versionName}")
         val token = bearerToken(clientId, clientSecret)
-        val appId = getAppId(token, apkInfo.applicationId)
+        val appId = getAppId(token, artifactInfo.applicationId)
         val languageInfo = getLanguageInfo(token, appId)
         val uploadUrl = getUploadUrl(token, appId, file)
         uploadFile(file, token, uploadUrl, progressChange)
@@ -80,7 +80,7 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
             return ReleaseStage.CreateDraft
         }
         submit(token, appId, releaseParams.onlineTime)
-        AppLogger.info(LOG_TAG, "新版本已提交审核：${apkInfo.applicationId}")
+        AppLogger.info(LOG_TAG, "新版本已提交审核：${artifactInfo.applicationId}")
         return ReleaseStage.SubmitReview
     }
 

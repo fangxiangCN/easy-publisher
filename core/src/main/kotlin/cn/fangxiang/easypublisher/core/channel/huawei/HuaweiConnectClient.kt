@@ -2,7 +2,7 @@ package cn.fangxiang.easypublisher.core.channel.huawei
 
 import cn.fangxiang.easypublisher.core.channel.ReleaseStage
 import cn.fangxiang.easypublisher.core.atSubmissionPoint
-import cn.fangxiang.easypublisher.core.ApkInfo
+import cn.fangxiang.easypublisher.core.ArtifactInfo
 import cn.fangxiang.easypublisher.core.ErrorKind
 import cn.fangxiang.easypublisher.core.PublishError
 import cn.fangxiang.easypublisher.core.channel.MarketInfo
@@ -45,7 +45,7 @@ internal class HuaweiConnectClient(private val channelId: String) {
      */
     suspend fun uploadApk(
         file: File,
-        apkInfo: ApkInfo,
+        artifactInfo: ArtifactInfo,
         clientId: String,
         clientSecret: String,
         releaseParams: ReleaseParams,
@@ -56,7 +56,7 @@ internal class HuaweiConnectClient(private val channelId: String) {
         val client = HttpClients.of(timeouts)
         val api = huaweiConnectApi(client)
         val token = "Bearer ${getToken(api, clientId, clientSecret)}"
-        val appId = getAppId(api, clientId, token, apkInfo.applicationId)
+        val appId = getAppId(api, clientId, token, artifactInfo.applicationId)
         val uploadUrl = getUploadUrl(api, clientId, token, appId, file)
         uploadFile(client, file, uploadUrl, progressChange)
         if (stopAfter == ReleaseStage.UploadArtifact) {

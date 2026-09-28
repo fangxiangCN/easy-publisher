@@ -41,7 +41,12 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
 
     private val app by option("--app", help = "包名").required()
 
-    private val apk by option("--apk", help = "APK 文件，或存放多渠道包的目录")
+    private val artifact by option(
+        "--artifact",
+        "--apk",
+        "--file",
+        help = "制品文件（.apk，鸿蒙为 .app），或存放多渠道包的目录",
+    )
         .file(mustExist = true, mustBeReadable = true)
         .required()
 
@@ -67,8 +72,10 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
     private val stopAfter by option(
         "--stop-after",
         help = "流程走到哪一步就停下：artifact=仅上传安装包（不创建版本）、" +
-            "draft=停在草稿态（可先到渠道后台核对再送审）、submit=一路走到送审（默认）。" +
-            "并非所有渠道都支持中途停下，小米的 dev/push 是原子的，只能 submit",
+            "draft=停在草稿态（可先到渠道后台核对再送审）、submit=一路走到送审。" +
+            "不指定则各渠道走到各自能到的最远阶段 —— 多数渠道是送审，" +
+            "鸿蒙因送审未经验证只到草稿。并非所有渠道都支持中途停下：" +
+            "小米的 dev/push 是原子的只能 submit，OPPO/vivo 没有草稿态",
     ).choice("artifact", "draft", "submit")
 
     private val timeout by option("--timeout", help = "单次请求超时秒数，默认 120").long()
@@ -89,15 +96,18 @@ class UploadCommand : SuspendingCliktCommand(name = "upload") {
 
         val jobId = service.submit(
             applicationId = applicationId,
-            apkPath = apk,
+            artifactPath = artifact,
             releaseParams = ReleaseParams(updateDesc = desc, onlineTime = scheduledAt),
             channelIds = channels,
             versionRule = rule,
             timeouts = timeout?.let { HttpTimeouts.ofSeconds(it) } ?: HttpTimeouts.DEFAULT,
+            // 不传就是 null：各渠道走到各自能到的最远阶段。
+            // 鸿蒙最远只到草稿（送审未经验证），其余渠道到送审
             stopAfter = when (stopAfter) {
                 "artifact" -> ReleaseStage.UploadArtifact
                 "draft" -> ReleaseStage.CreateDraft
-                else -> ReleaseStage.SubmitReview
+                "submit" -> ReleaseStage.SubmitReview
+                else -> null
             },
         )
 

@@ -47,8 +47,8 @@ class HonorChannel : Channel {
         requireSupportedStage(request.stopAfter)
         val client = HonorConnectClient(request.timeouts)
         return client.uploadApk(
-            file = request.apkFile,
-            apkInfo = request.apkInfo,
+            file = request.artifactFile,
+            artifactInfo = request.artifactInfo,
             clientId = request.credentials[CLIENT_ID],
             clientSecret = request.credentials[CLIENT_SECRET],
             releaseParams = request.releaseParams,

@@ -65,7 +65,7 @@ class MiChannel : Channel {
         val account = request.credentials[KEY_ACCOUNT]
         val certificate = request.credentials[KEY_PUBLIC_KEY]
         val password = request.credentials[KEY_PRIVATE_KEY]
-        val packageName = request.apkInfo.applicationId
+        val packageName = request.artifactInfo.applicationId
 
         // 日志里只出现账号与包名；证书、私钥、SIG 一律不落盘
         AppLogger.info(LOG_TAG, "开始提交新版本：$packageName，账号=${redact(account)}")
@@ -84,7 +84,7 @@ class MiChannel : Channel {
             account = account,
             certificate = certificate,
             password = password,
-            apkFile = request.apkFile,
+            artifactFile = request.artifactFile,
             packageInfo = packageInfo,
             updateDesc = request.releaseParams.updateDesc,
             onlineTime = request.releaseParams.onlineTime,
