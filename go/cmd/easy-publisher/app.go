@@ -7,6 +7,7 @@ import (
 	"github.com/fangxiangCN/easy-publisher/go/internal/artifact"
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/config"
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +18,7 @@ func newAppCmd() *cobra.Command {
 		Use:   "app",
 		Short: "管理待发布的应用",
 	}
-	cmd.AddCommand(newAppListCmd(), newAppAddCmd(), newAppRemoveCmd())
+	cmd.AddCommand(newAppListCmd(), newAppAddCmd(), newAppSetCmd(), newAppRemoveCmd())
 	return cmd
 }
 
@@ -100,6 +101,7 @@ func newAppAddCmd() *cobra.Command {
 	var (
 		id              string
 		name            string
+		label           string
 		channels        []string
 		multiChannelApk bool
 		jsonOut         bool
@@ -140,12 +142,16 @@ func newAppAddCmd() *cobra.Command {
 				cfg.Name = existing.Name
 				cfg.CreateTime = existing.CreateTime
 				cfg.MultiChannelApk = multiChannelApk || existing.MultiChannelApk
+				cfg.ExpectedLabel = existing.ExpectedLabel
 			default:
 				cfg.Name = applicationID
 				cfg.CreateTime = time.Now().UnixMilli()
 			}
 			if name != "" {
 				cfg.Name = name
+			}
+			if label != "" {
+				cfg.ExpectedLabel = label
 			}
 
 			for _, channelID := range targets {
@@ -191,8 +197,75 @@ func newAppAddCmd() *cobra.Command {
 		nil, "启用的渠道，逗号分隔。可用："+strings.Join(channel.IDs(), ", "))
 	cmd.Flags().BoolVar(&multiChannelApk, "multi-channel-apk", false,
 		"每个渠道使用独立的渠道包（按文件名中的渠道标识匹配）")
+	cmd.Flags().StringVar(&label, "label", "",
+		"商店页展示的应用名，checklist 用它比对 APK 内的 android:label")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "输出 JSON")
 	_ = cmd.MarkFlagRequired("id")
+	return cmd
+}
+
+// newAppSetCmd 更新应用配置里与发布检查相关的字段。
+//
+// 与 add 分开：add 处理「有哪些渠道」，set 处理「这些元信息是什么」，
+// 混在一起会让「只想补一个应用名」变成一次容易误清渠道的操作。
+func newAppSetCmd() *cobra.Command {
+	var (
+		id      string
+		label   string
+		name    string
+		jsonOut bool
+	)
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "修改应用信息（不改动渠道与凭据）",
+		Long: "修改应用信息。只动你指定的字段，渠道配置与凭据原样保留。\n\n" +
+			"--label 用于 checklist 的应用名一致性检查：它应当是商店页展示的名字，" +
+			"checklist 会拿它与 APK 内的 android:label 比对。",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			applicationID, err := artifact.ValidateApplicationID(id)
+			if err != nil {
+				return err
+			}
+			if label == "" && name == "" {
+				return eperr.ConfigurationError("至少要指定 --label 或 --name 之一")
+			}
+
+			store := config.NewStore("")
+			cfg, found, err := store.Get(applicationID)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return eperr.ConfigurationError(
+					"没有找到应用 %s，先用 `app add --id %s` 添加", applicationID, applicationID)
+			}
+
+			if label != "" {
+				cfg.ExpectedLabel = label
+			}
+			if name != "" {
+				cfg.Name = name
+			}
+			if err := store.Save(cfg); err != nil {
+				return err
+			}
+
+			if jsonOut {
+				return output.JSON(map[string]any{
+					"ok": true, "applicationId": applicationID,
+					"name": cfg.Name, "expectedLabel": cfg.ExpectedLabel,
+				})
+			}
+			output.Line("已更新 %s：应用名=%s，商店页名称=%s",
+				applicationID, cfg.Name, cfg.ExpectedLabel)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&id, "app", "", "包名（必填）")
+	cmd.Flags().StringVar(&label, "label", "", "商店页展示的应用名")
+	cmd.Flags().StringVar(&name, "name", "", "配置里的应用名（仅本地展示用）")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "输出 JSON")
+	_ = cmd.MarkFlagRequired("app")
 	return cmd
 }
 

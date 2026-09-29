@@ -93,6 +93,14 @@ type AppConfig struct {
 	CreateTime      int64           `json:"createTime"`
 	Channels        []ChannelConfig `json:"channels"`
 	MultiChannelApk bool            `json:"multiChannelApk"`
+
+	// ExpectedLabel 是商店页展示的应用名，用于上架前比对 APK 内的
+	// android:label。两者不一致会被渠道驳回 —— 华为实测报
+	// "AppName is not same as it in apk package"。
+	//
+	// 可选：未配置时 checklist 只提示 APK 内的实际名称，不做一致性判定。
+	// 新增字段对老配置文件无害（零值即未配置）。
+	ExpectedLabel string `json:"expectedLabel,omitempty"`
 }
 
 // String 不输出参数值，避免凭据进入日志。

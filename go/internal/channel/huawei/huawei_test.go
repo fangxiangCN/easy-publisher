@@ -445,6 +445,11 @@ func TestQueryMarketReleaseStateMapping(t *testing.T) {
 		{5, channel.ReviewUnderReview},
 		{7, channel.ReviewDraft},
 		{8, channel.ReviewRejected},
+		// 1 是「上架审核不通过」：首次上架被拒走的就是这个码，
+		// 曾因为没映射而显示成「状态未知」（civilian 实测）。
+		{1, channel.ReviewRejected},
+		// 9 是「下架审核不通过」，同属审核给出否定结论。
+		{9, channel.ReviewRejected},
 		{2, channel.ReviewOffline},
 		{6, channel.ReviewOffline},
 		{10, channel.ReviewOffline},

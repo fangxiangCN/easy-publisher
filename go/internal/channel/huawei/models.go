@@ -227,6 +227,18 @@ func (a *AuditInfo) toReviewFeedback() *channel.ReviewFeedback {
 //     草稿应用一律显示「状态未知」，用户无从判断能不能提交。
 //   - 版本信息缺失时 LastVersion 传 nil 而不是伪造一个版本号，也不抛异常。
 //
+// # 为什么 1 与 9 也归为 Rejected
+//
+// 1 是「上架审核不通过」、9 是「下架审核不通过」，两者都是审核明确给出否定
+// 结论、且带审核意见的状态。早期只映射了 8（升级审核不通过），导致首次上架
+// 被拒的应用显示成「状态未知」—— 用户看到未知状态时无法判断是被拒了还是接口
+// 变了，只能去后台翻。实测：civilian 首次上架被拒时 releaseState=1，
+// auditOpinion 同时有值，即是有意见可读的拒审态。
+//
+// 3（待上架）与 11（撤销上架）仍归 Unknown：两者的语义分别是「已过审待发布」
+// 与「开发者主动撤回」，都不属于拒审，但也不对应本包已有的状态取值。
+// 不猜，保留 RawState 让用户拿原始值去后台核对。
+//
 // ToMarketInfo 映射到渠道无关的状态，含审核意见。
 func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
@@ -238,7 +250,7 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 			state = channel.ReviewOnline
 		case 4, 5:
 			state = channel.ReviewUnderReview
-		case 8:
+		case 1, 8, 9:
 			state = channel.ReviewRejected
 		case 7:
 			state = channel.ReviewDraft

@@ -28,6 +28,7 @@ func registerTools(server *mcp.Server, svc *publish.Service) {
 	registerListApps(server, svc)
 	registerListChannels(server)
 	registerGetMarketState(server, svc)
+	registerChecklist(server, svc)
 	registerCheckRelease(server, svc)
 	registerUploadApk(server, svc)
 	registerGetUploadStatus(server, svc)
@@ -290,6 +291,83 @@ func registerGetMarketState(server *mcp.Server, svc *publish.Service) {
 	})
 }
 
+// ---- checklist ----
+
+type checklistInput struct {
+	ApplicationID string   `json:"applicationId" jsonschema:"包名"`
+	ArtifactPath  string   `json:"artifactPath" jsonschema:"待上架的制品路径（.apk，鸿蒙为 .app）"`
+	Channels      []string `json:"channels,omitempty" jsonschema:"只检查指定渠道；省略则检查全部已启用渠道"`
+	ExpectLabel   string   `json:"expectLabel,omitempty" jsonschema:"商店页展示的应用名，用于比对 APK 内的 android:label"`
+	TimeoutSec    int64    `json:"timeoutSeconds,omitempty" jsonschema:"单次请求超时秒数，默认 120"`
+}
+
+type checklistOutput struct {
+	// Error 非空表示本次调用失败
+	Error         *errorPayload    `json:"error,omitempty"`
+	Artifact      *artifactSummary `json:"artifact,omitempty"`
+	Checks        []checklistItem  `json:"checks"`
+	BlockedCount  int              `json:"blockedCount"`
+	FailedCount   int              `json:"failedCount"`
+	Ready         bool             `json:"ready"`
+	ApplicationID string           `json:"applicationId"`
+}
+
+// checklist 是上架前的逐项检查。
+//
+// 与 check_release 的分工：check_release 面向「这次提交会不会被渠道拒绝」，
+// 逐渠道给结论；checklist 面向「这个包本身有没有低级错误」，逐项给结论，
+// 且把「查不了」也算作阻塞。上架前建议两个都跑 —— 它们是不同的失败面。
+func registerChecklist(server *mcp.Server, svc *publish.Service) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "checklist",
+		Description: "上架前逐项检查（只读，不会提交任何东西）。检查制品本身的问题：" +
+			"包名与配置是否一致、应用名是否还是脚手架占位符、图标是否还是模板图、" +
+			"版本号是否高于各渠道线上版本；同时检查各渠道是否正在审核中。" +
+			"每一项都对应一类真实发生过的驳回。" +
+			"status 为「不通过」或「跳过」的都算阻塞项（跳过 = 没能检查，不等于没问题）。",
+		Annotations: readOnly(),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checklistInput) (*mcp.CallToolResult, checklistOutput, error) {
+		applicationID, err := artifact.ValidateApplicationID(in.ApplicationID)
+		if err != nil {
+			return errorResult(err, func(e *errorPayload) checklistOutput { return checklistOutput{Error: e} })
+		}
+
+		result, err := svc.Checklist(ctx, publish.ChecklistOptions{
+			ApplicationID: applicationID,
+			ArtifactPath:  in.ArtifactPath,
+			ChannelIDs:    in.Channels,
+			ExpectLabel:   in.ExpectLabel,
+			Timeouts:      timeoutsOf(in.TimeoutSec),
+		})
+		if err != nil {
+			return errorResult(err, func(e *errorPayload) checklistOutput { return checklistOutput{Error: e} })
+		}
+
+		out := checklistOutput{
+			ApplicationID: result.ApplicationID,
+			Checks:        []checklistItem{},
+			BlockedCount:  len(result.Blocking()),
+			FailedCount:   len(result.Failed()),
+		}
+		out.Ready = out.BlockedCount == 0
+		if result.Artifact.Path != "" {
+			a := result.Artifact
+			out.Artifact = &artifactSummary{
+				Path: a.Path, ApplicationID: a.ApplicationID,
+				VersionCode: a.VersionCode, VersionName: a.VersionName,
+				SizeBytes: a.SizeBytes,
+			}
+		}
+		for _, c := range result.Checks {
+			out.Checks = append(out.Checks, checklistItem{
+				ID: c.ID, Title: c.Title, Status: c.Status.String(),
+				Detail: c.Detail, Fix: c.Fix,
+			})
+		}
+		return nil, out, nil
+	})
+}
+
 // ---- check_release ----
 
 type checkReleaseInput struct {
@@ -297,6 +375,16 @@ type checkReleaseInput struct {
 	ArtifactPath     string   `json:"artifactPath" jsonschema:"制品文件路径（.apk，鸿蒙为 .app），或存放多渠道包的目录"`
 	Channels         []string `json:"channels,omitempty" jsonschema:"只检查指定渠道；省略则检查全部已启用渠道"`
 	AllowSameVersion bool     `json:"allowSameVersion,omitempty" jsonschema:"允许版本号与线上相同"`
+	ExpectLabel      string   `json:"expectLabel,omitempty" jsonschema:"商店页展示的应用名，用于比对 APK 内的 android:label。省略则用应用配置里的 expectedLabel"`
+}
+
+// checklistItem 是一项上架前检查的结论。
+type checklistItem struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	Fix    string `json:"fix,omitempty"`
 }
 
 type checkReleaseItem struct {
@@ -311,10 +399,13 @@ type checkReleaseItem struct {
 type checkReleaseOutput struct {
 	// Error 非空表示本次调用失败。结构化错误必须放在这里 ——
 	// SDK 会用输出结构体覆盖 structuredContent
-	Error          *errorPayload      `json:"error,omitempty"`
-	Artifact       *artifactSummary   `json:"artifact,omitempty"`
-	Warning        string             `json:"warning,omitempty"`
-	Note           string             `json:"note,omitempty"`
+	Error    *errorPayload    `json:"error,omitempty"`
+	Artifact *artifactSummary `json:"artifact,omitempty"`
+	Warning  string           `json:"warning,omitempty"`
+	Note     string           `json:"note,omitempty"`
+	// Checks 是制品级的检查项（应用名、图标等）。
+	// 结论为「跳过」的项同样算阻塞 —— 查不了不等于没问题。
+	Checks         []checklistItem    `json:"checks,omitempty"`
 	Channels       []checkReleaseItem `json:"channels"`
 	BlockedCount   int                `json:"blockedCount"`
 	ResolvedStages map[string]string  `json:"resolvedStages"`
@@ -335,8 +426,10 @@ type artifactSummary struct {
 func registerCheckRelease(server *mcp.Server, svc *publish.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "check_release",
-		Description: "发布预检（只读，不会提交任何东西）。解析制品、查询各渠道状态，" +
-			"逐渠道判断是否满足发布前置条件，并说明不满足的原因。建议在 upload_apk 之前调用。",
+		Description: "发布预检（只读，不会提交任何东西）。解析制品、检查应用名与图标是否合规、" +
+			"查询各渠道状态，逐渠道判断是否满足发布前置条件，并说明不满足的原因。" +
+			"checks 里 status 为「不通过」或「跳过」的都算阻塞项，需先处理。" +
+			"建议在 upload_apk 之前调用。",
 		Annotations: readOnly(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checkReleaseInput) (*mcp.CallToolResult, checkReleaseOutput, error) {
 		applicationID, err := artifact.ValidateApplicationID(in.ApplicationID)
@@ -387,6 +480,24 @@ func registerCheckRelease(server *mcp.Server, svc *publish.Service) {
 		out.ResolvedStages = map[string]string{}
 		for id, s := range stages {
 			out.ResolvedStages[id] = s.String()
+		}
+
+		// 制品级检查：应用名、图标、包名一致性。
+		// 这些检查不联网，即使渠道状态查询失败也能给出结论
+		if info != nil {
+			cfg, cfgErr := svc.App(applicationID)
+			if cfgErr != nil {
+				return errorResult(cfgErr, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
+			}
+			for _, c := range publish.ArtifactChecks(cfg, *info, in.ExpectLabel) {
+				out.Checks = append(out.Checks, checklistItem{
+					ID: c.ID, Title: c.Title, Status: c.Status.String(),
+					Detail: c.Detail, Fix: c.Fix,
+				})
+				if c.Status == publish.CheckFail || c.Status == publish.CheckSkip {
+					out.BlockedCount++
+				}
+			}
 		}
 
 		for _, ch := range channel.All() {

@@ -15,9 +15,45 @@ description: 把 Android APK（或鸿蒙的 .app）提交到华为、小米、OP
 要停止发布只能让用户登录各商店后台手动操作。
 
 因此：
-- 发版前必须先跑 `status` 确认各渠道状态。
+- **发版前必须先跑 `checklist`**（见下节）。它逐项检查会导致驳回的问题，且零副作用。
 - 不确定时先问用户，不要自己决定发版时机。
 - 用户没有明确说"发版"或"上传"时，不要调用 `upload`。
+
+## 上架前必做：checklist
+
+**每次发版前都要跑，这是硬性步骤。** 它是只读命令，不产生任何副作用：
+
+```bash
+easy-publisher checklist --app <包名> --artifact <制品路径> --json
+```
+
+检查内容分两类：
+
+**制品本身**（本地即可判定，不联网）
+- 制品能解析、包名与配置一致 —— 防止把 A 应用的新版本推到 B 应用的商店页
+- 应用名（`android:label`）不是脚手架占位符，且与商店页名称一致
+- 图标不是 Flutter/RN 脚手架的默认模板图
+- 各渠道版本号高于线上版本
+
+**渠道状态**（联网）
+- 是否正在审核中 —— 审核中的渠道会拒绝新版本
+- 各渠道线上版本号，用于判断本次版本号是否足够
+
+这几项都对应**真实发生过的驳回**：应用名不一致（华为报
+`AppName is not same as it in apk package`）、模板图标（判为"图标与安装后不一致"）、
+版本号未递增、渠道审核中被拒。
+
+读结果：`checks` 数组里 `status` 为「不通过」或「跳过」的都算阻塞项，退出码为 5。
+**「跳过」同样算阻塞** —— 查不了不等于没问题，跳过某项时必须先查清楚再发版。
+
+常见跳过的原因：状态查询失败（凭据/网络）、未配置 `expectedLabel`（无法比对应用名）。
+应用名检查需要商店页的名字，用 `--expect-label "应用名"` 传入，或写进应用配置：
+
+```bash
+easy-publisher app set --app <包名> --label "军队文职真题"
+```
+
+checklist 返回提醒（如「同号提交会被拒绝」）不阻塞，但要在执行前向用户说明。
 
 ## 各渠道能停在哪儿
 
@@ -78,7 +114,22 @@ easy-publisher upload --app <包名> --artifact <包> --desc x       # 真发版
 
 所有命令都支持 `--json`，输出结构化结果到 stdout，日志走 stderr，可直接管道给 `jq`。
 
-### 查状态（只读，发版前必做）
+### 上架前检查（只读，发版前必做）
+
+```bash
+easy-publisher checklist --app com.example.app --artifact ./app-release.apk --json
+```
+
+见上文「上架前必做：checklist」。
+
+### 查状态（只读）
+
+```bash
+easy-publisher status --app com.example.app --json
+```
+
+`checklist` 已包含状态检查，这一步作为单独排查渠道时使用。
+
 
 ```bash
 easy-publisher status --app com.example.app --json
@@ -168,8 +219,9 @@ easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc 
 用户说"帮我发个版"时：
 
 1. 先 `app list` 确认有哪些应用，如果有多个，问用户发哪个。
-2. `status --app <包名> --json` 看各渠道状态。如果有渠道在审核中，告知用户并问是否跳过该渠道。
-3. 确认 APK 路径。用户没给就问，不要猜。
+2. 确认 APK 路径。用户没给就问，不要猜。
+3. **跑 `checklist`**（见上节）。有阻塞项就先修；「跳过」的项要查清楚原因，
+   不要带着未确认的项往下走。
 4. 复述一遍将要执行的操作（哪个包、什么版本、发到哪些渠道），**得到用户确认后**再执行。
 5. 执行 `upload`，后台跑，轮询结果。若目标渠道支持草稿（华为、荣耀）且用户对这次
    发版没有十足把握，建议先 `--stop-after draft`，让用户到后台核对后再送审。

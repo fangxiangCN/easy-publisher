@@ -43,15 +43,17 @@ go build -o easy-publisher-mcp ./cmd/easy-publisher-mcp
 
 ```bash
 # 1. 登记应用（会打印出每个渠道需要填哪些参数）
-easy-publisher app add --id com.example.app --name 我的应用 --channels huawei,mi
+#    --label 是商店页展示的应用名，checklist 用它比对 APK 内的 android:label
+easy-publisher app add --id com.example.app --name 我的应用 --label 我的应用 \
+    --channels huawei,mi
 
 # 2. 填凭据
 easy-publisher channel set --app com.example.app --channel huawei --key client_id --value xxx
 # 敏感值建议从文件读，避免进入 shell 历史
 easy-publisher channel set --app com.example.app --channel mi --key publicKey --value-file ./mi.cer
 
-# 3. 发版前先看各渠道状态
-easy-publisher status --app com.example.app
+# 3. 发版前逐项检查（只读，零副作用）—— 这是必做步骤
+easy-publisher checklist --app com.example.app --artifact ./app-release.apk
 
 # 4. 发版
 easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc "修复若干问题"
@@ -59,6 +61,31 @@ easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc 
 # 鸿蒙（.app 包，app_id 需单独配置）
 easy-publisher channel set --app com.example.harmony --channel harmony --key app_id --value 123456
 easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "修复若干问题"
+```
+
+### 上架前检查（checklist）
+
+**每次发版前都要跑。** 只读命令，不产生任何副作用：
+
+```bash
+easy-publisher checklist --app com.example.app --artifact ./app-release.apk --json
+```
+
+它检查两类内容。**制品本身**（本地判定，不联网）：包名与配置是否一致、应用名
+（`android:label`）是否还是脚手架占位符且与商店页一致、图标是否还是脚手架模板图、
+版本号是否高于各渠道线上版本。**渠道状态**（联网）：是否正在审核中、线上版本号。
+
+这几项都对应**真实发生过的驳回**：应用名不一致（华为报
+`AppName is not same as it in apk package`）、模板图标（判为「图标与安装后不一致」）、
+版本号未递增、渠道审核中被拒。
+
+`--json` 输出的 `checks[].status` 为「不通过」或「跳过」的**都算阻塞项**，退出码 5。
+「跳过」同样算阻塞 —— 查不了不等于没问题。
+
+常见跳过原因：渠道状态查询失败（凭据/网络）、未配置商店页应用名。补上应用名：
+
+```bash
+easy-publisher app set --app com.example.app --label 我的应用
 ```
 
 ### 凭据

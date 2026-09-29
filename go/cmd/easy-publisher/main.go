@@ -53,6 +53,7 @@ func newRootCmd() *cobra.Command {
 		newAppCmd(),
 		newChannelCmd(),
 		newStatusCmd(),
+		newChecklistCmd(),
 		newUploadCmd(),
 		newJobCmd(),
 	)
