@@ -115,11 +115,11 @@ func Flush() {
 // ---- 文件输出 ----
 
 type fileSink struct {
-	mu   sync.Mutex
-	dir  string
-	day  string
-	f    *os.File
-	w    *bufio.Writer
+	mu  sync.Mutex
+	dir string
+	day string
+	f   *os.File
+	w   *bufio.Writer
 }
 
 func newFileSink(dir string) (*fileSink, error) {

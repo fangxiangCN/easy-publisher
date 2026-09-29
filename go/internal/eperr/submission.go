@@ -1,4 +1,4 @@
-package publish
+package eperr
 
 import (
 	"context"

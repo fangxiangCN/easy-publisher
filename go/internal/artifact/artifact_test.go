@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fangxiangCN/easy-publisher/go/internal/publish"
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 )
 
 // APK fixture 是用 Android SDK 的 aapt2 link 从文本 manifest 真实构建出来的，
@@ -241,11 +241,11 @@ func TestReadAppPackErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("期望失败，实际成功")
 			}
-			var pe *publish.Error
+			var pe *eperr.Error
 			if !errors.As(err, &pe) {
-				t.Fatalf("错误类型不是 *publish.Error: %T", err)
+				t.Fatalf("错误类型不是 *eperr.Error: %T", err)
 			}
-			if pe.Kind != publish.KindLocalFile {
+			if pe.Kind != eperr.KindLocalFile {
 				t.Errorf("Kind = %v, 期望 LocalFile", pe.Kind)
 			}
 			if !strings.Contains(pe.Msg, tc.wantSubstr) {

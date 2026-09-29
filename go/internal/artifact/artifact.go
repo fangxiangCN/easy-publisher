@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/avast/apkparser"
-	"github.com/fangxiangCN/easy-publisher/go/internal/publish"
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 )
 
 // Kind 是制品类型。决定怎么解析元信息，也决定能发给哪些渠道。
@@ -85,19 +85,19 @@ func Read(path string) (Info, error) {
 	st, err := os.Stat(path)
 	switch {
 	case os.IsNotExist(err):
-		return Info{}, publish.LocalFileError("制品文件不存在：%s", path)
+		return Info{}, eperr.LocalFileError("制品文件不存在：%s", path)
 	case err != nil:
-		return Info{}, publish.LocalFileError("无法读取制品文件 %s: %v", path, err)
+		return Info{}, eperr.LocalFileError("无法读取制品文件 %s: %v", path, err)
 	case st.IsDir():
-		return Info{}, publish.LocalFileError("不是文件：%s", path)
+		return Info{}, eperr.LocalFileError("不是文件：%s", path)
 	case st.Size() == 0:
-		return Info{}, publish.LocalFileError("制品文件为空：%s", path)
+		return Info{}, eperr.LocalFileError("制品文件为空：%s", path)
 	}
 
 	kind, ok := KindOfFile(path)
 	if !ok {
 		ext := strings.TrimPrefix(filepath.Ext(path), ".")
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"不支持的制品格式 .%s（%s）。支持：APK(.apk)、App Pack(.app)",
 			ext, filepath.Base(path),
 		)
@@ -153,20 +153,20 @@ func readAPK(base Info) (Info, error) {
 	// 我们只需要 manifest，因此 resources 的错误可以忽略 —— 版本号不在资源表里。
 	zipErr, _, manErr := apkparser.ParseApk(base.Path, scanner)
 	if zipErr != nil {
-		return Info{}, publish.LocalFileError("打开 APK 失败：%s（%v）", base.Path, zipErr)
+		return Info{}, eperr.LocalFileError("打开 APK 失败：%s（%v）", base.Path, zipErr)
 	}
 	// ErrEndParsing 是我们主动结束解析的信号，不是错误
 	if manErr != nil && manErr != apkparser.ErrEndParsing {
-		return Info{}, publish.LocalFileError("解析 APK 的 AndroidManifest 失败：%s（%v）", base.Path, manErr)
+		return Info{}, eperr.LocalFileError("解析 APK 的 AndroidManifest 失败：%s（%v）", base.Path, manErr)
 	}
 
 	if scanner.packageName == "" {
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"APK 的 AndroidManifest 里没有 package 属性：%s", base.Path)
 	}
 	code, err := strconv.ParseInt(scanner.versionCode, 10, 64)
 	if err != nil {
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"APK 的 versionCode 不是合法整数（%q）：%s", scanner.versionCode, base.Path)
 	}
 
@@ -211,20 +211,20 @@ func readAppPack(base Info) (Info, error) {
 
 	var pi packInfo
 	if err := json.Unmarshal(data, &pi); err != nil {
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"App Pack 的 %s 无法解析：%s（%v）", packInfoEntry, base.FileName(), err)
 	}
 
 	if pi.Summary == nil || pi.Summary.App == nil ||
 		pi.Summary.App.BundleName == nil || *pi.Summary.App.BundleName == "" {
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"App Pack 的 %s 缺少 summary.app.bundleName，无法确定包名：%s",
 			packInfoEntry, base.FileName())
 	}
 	// 版本号缺失时不做静默降级：PublishPolicy 的版本比对依赖它，
 	// 拿不到就明确报错，而不是跳过校验却让人以为已经检查过了
 	if pi.Summary.App.Version == nil || pi.Summary.App.Version.Code == nil {
-		return Info{}, publish.LocalFileError(
+		return Info{}, eperr.LocalFileError(
 			"App Pack 的 %s 缺少 summary.app.version.code，无法做版本号校验：%s",
 			packInfoEntry, base.FileName())
 	}
@@ -242,7 +242,7 @@ func readAppPack(base Info) (Info, error) {
 func readZipEntry(path, entry string) ([]byte, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		return nil, publish.LocalFileError("打开 App Pack 失败：%s（%v）", path, err)
+		return nil, eperr.LocalFileError("打开 App Pack 失败：%s（%v）", path, err)
 	}
 	defer r.Close()
 
@@ -252,17 +252,17 @@ func readZipEntry(path, entry string) ([]byte, error) {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return nil, publish.LocalFileError("读取 %s 失败：%s（%v）", entry, path, err)
+			return nil, eperr.LocalFileError("读取 %s 失败：%s（%v）", entry, path, err)
 		}
 		defer rc.Close()
 		// 限制读取大小：pack.info 正常只有几 KB，给个宽松上限防止构造的恶意包耗尽内存
 		data, err := io.ReadAll(io.LimitReader(rc, maxPackInfoBytes))
 		if err != nil {
-			return nil, publish.LocalFileError("读取 %s 失败：%s（%v）", entry, path, err)
+			return nil, eperr.LocalFileError("读取 %s 失败：%s（%v）", entry, path, err)
 		}
 		return data, nil
 	}
-	return nil, publish.LocalFileError(
+	return nil, eperr.LocalFileError(
 		"App Pack 里找不到 %s：%s。请确认这是 DevEco Studio 打出的 .app 发布包，而不是单个 .hap",
 		entry, filepath.Base(path))
 }
@@ -280,10 +280,10 @@ var applicationIDPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0
 func ValidateApplicationID(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return "", publish.ConfigurationError("包名不能为空")
+		return "", eperr.ConfigurationError("包名不能为空")
 	}
 	if !applicationIDPattern.MatchString(trimmed) {
-		return "", publish.ConfigurationError(
+		return "", eperr.ConfigurationError(
 			"包名格式不合法：%s（应形如 com.example.app）", trimmed)
 	}
 	return trimmed, nil

@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/logx"
-	"github.com/fangxiangCN/easy-publisher/go/internal/publish"
 )
 
 // fillRandom 用加密安全随机数填充缓冲区。
@@ -45,7 +45,7 @@ func Require(store CredentialStore, applicationID, channelID, paramName string) 
 	if ok {
 		return value, nil
 	}
-	return "", publish.CredentialError(
+	return "", eperr.CredentialError(
 		"缺少凭据参数 %s，可通过环境变量 %s 或 "+
 			"`easy-publisher channel set --app %s --channel %s --key %s --value <值>` 配置",
 		paramName, EnvName(channelID, paramName), applicationID, channelID, paramName,
@@ -165,7 +165,7 @@ func (s *LayeredStore) Get(applicationID, channelID, paramName string) (string, 
 // 消息里只出现包名，不含任何凭据值。
 func requireSameApp(applicationID string, config AppConfig) error {
 	if applicationID != config.ApplicationID {
-		return publish.ConfigurationError(
+		return eperr.ConfigurationError(
 			"凭据来源与目标应用不一致：请求 %s，持有 %s。这通常意味着编排层传错了配置对象",
 			applicationID, config.ApplicationID,
 		)

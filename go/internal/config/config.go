@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/logx"
-	"github.com/fangxiangCN/easy-publisher/go/internal/publish"
 )
 
 // Param 是一个渠道参数的键值对。
@@ -204,7 +204,7 @@ func (s *Store) List() ([]AppConfig, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, publish.ConfigurationError("读取配置目录失败：%v", err)
+		return nil, eperr.ConfigurationError("读取配置目录失败：%v", err)
 	}
 	var out []AppConfig
 	for _, e := range entries {
@@ -242,7 +242,7 @@ func (s *Store) Require(applicationID string) (AppConfig, error) {
 	}
 	if !ok {
 		id, _ := validateID(applicationID)
-		return AppConfig{}, publish.ConfigurationError(
+		return AppConfig{}, eperr.ConfigurationError(
 			"未找到应用配置：%s，请先执行 `easy-publisher app add --id %s`", id, id)
 	}
 	return cfg, nil
@@ -264,35 +264,35 @@ func (s *Store) Save(cfg AppConfig) error {
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return publish.ConfigurationError("序列化配置失败：%v", err)
+		return eperr.ConfigurationError("序列化配置失败：%v", err)
 	}
 	data = append(data, '\n')
 
 	target := filepath.Join(s.dir, id+fileSuffix)
 	tmp, err := os.CreateTemp(s.dir, "."+id+fileSuffix+".tmp*")
 	if err != nil {
-		return publish.ConfigurationError("创建临时文件失败：%v", err)
+		return eperr.ConfigurationError("创建临时文件失败：%v", err)
 	}
 	tmpName := tmp.Name()
 	// 临时文件也要 0600：它同样含明文凭据，且创建到 rename 之间有窗口
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return publish.ConfigurationError("设置临时文件权限失败：%v", err)
+		return eperr.ConfigurationError("设置临时文件权限失败：%v", err)
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return publish.ConfigurationError("写入配置失败：%v", err)
+		return eperr.ConfigurationError("写入配置失败：%v", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return publish.ConfigurationError("关闭临时文件失败：%v", err)
+		return eperr.ConfigurationError("关闭临时文件失败：%v", err)
 	}
 	// 同一目录内 rename 是原子的，读者要么看到旧内容要么看到新内容，不会看到半截
 	if err := os.Rename(tmpName, target); err != nil {
 		os.Remove(tmpName)
-		return publish.ConfigurationError("替换配置文件失败：%v", err)
+		return eperr.ConfigurationError("替换配置文件失败：%v", err)
 	}
 	logx.Info("已保存配置", "applicationId", cfg.ApplicationID)
 	return nil
@@ -316,7 +316,7 @@ func (s *Store) Remove(applicationID string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, publish.ConfigurationError("无法读取配置：%v", err)
+		return false, eperr.ConfigurationError("无法读取配置：%v", err)
 	}
 
 	if size := st.Size(); size > 0 {
@@ -332,7 +332,7 @@ func (s *Store) Remove(applicationID string) (bool, error) {
 		}
 	}
 	if err := os.Remove(path); err != nil {
-		return false, publish.ConfigurationError("删除配置失败：%v", err)
+		return false, eperr.ConfigurationError("删除配置失败：%v", err)
 	}
 	logx.Info("已删除配置", "applicationId", applicationID)
 	return true, nil
@@ -354,7 +354,7 @@ func (s *Store) read(path string) (AppConfig, error) {
 
 func ensureSecureDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return publish.ConfigurationError("创建配置目录失败：%v", err)
+		return eperr.ConfigurationError("创建配置目录失败：%v", err)
 	}
 	// MkdirAll 的权限受 umask 影响，显式再设一次
 	if err := os.Chmod(dir, 0o700); err != nil {
@@ -373,10 +373,10 @@ var idPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$`)
 func validateID(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return "", publish.ConfigurationError("包名不能为空")
+		return "", eperr.ConfigurationError("包名不能为空")
 	}
 	if !idPattern.MatchString(trimmed) {
-		return "", publish.ConfigurationError("包名格式不合法：%s（应形如 com.example.app）", trimmed)
+		return "", eperr.ConfigurationError("包名格式不合法：%s（应形如 com.example.app）", trimmed)
 	}
 	return trimmed, nil
 }

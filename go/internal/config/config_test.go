@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fangxiangCN/easy-publisher/go/internal/publish"
+	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 )
 
 func sample(id string) AppConfig {
@@ -155,8 +155,8 @@ func TestSaveRejectsInvalidApplicationID(t *testing.T) {
 	if err == nil {
 		t.Fatal("非法包名应当被拒绝")
 	}
-	var pe *publish.Error
-	if !errors.As(err, &pe) || pe.Kind != publish.KindConfiguration {
+	var pe *eperr.Error
+	if !errors.As(err, &pe) || pe.Kind != eperr.KindConfiguration {
 		t.Errorf("期望 Configuration 错误，实际 %v", err)
 	}
 }
@@ -247,8 +247,8 @@ func TestRequireSameAppRejectsMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("配置归属不一致应当立刻失败")
 	}
-	var pe *publish.Error
-	if !errors.As(err, &pe) || pe.Kind != publish.KindConfiguration {
+	var pe *eperr.Error
+	if !errors.As(err, &pe) || pe.Kind != eperr.KindConfiguration {
 		t.Errorf("期望 Configuration 错误，实际 %v", err)
 	}
 	if strings.Contains(err.Error(), "id-123") {

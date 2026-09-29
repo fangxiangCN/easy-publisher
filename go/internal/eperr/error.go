@@ -1,5 +1,8 @@
-// Package publish 定义发布流程的错误模型、前置策略与任务编排。
-package publish
+// Package eperr 定义发布流程的结构化错误模型。
+//
+// 单独成包是为了打破依赖环：渠道实现需要用它报错，而编排层（publish）
+// 又需要引用渠道接口。错误类型不依赖任何内部包，因此放在最底层。
+package eperr
 
 import (
 	"context"
