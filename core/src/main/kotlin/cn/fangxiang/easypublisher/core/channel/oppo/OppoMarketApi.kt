@@ -193,6 +193,71 @@ internal class OppoMarketApi(
             val responseBody = client.textResponse(request, CHANNEL_ID)
             checkSuccess(responseBody, "提交版本")
         }
+        // app/upd 是异步接口：errno=0 只代表任务入队。必须轮询才能真正知道版本
+        // 有没有创建成功 —— 否则缺必传参数之类的失败会被当成成功上报，
+        // 线上版本号纹丝不动却没有任何报错。
+        //
+        // 轮询失败意味着任务确定失败（渠道给出了原因），此时版本没有改变，
+        // 因此不套 atSubmissionPoint。
+        waitSubmitResult(token, artifactInfo)
+    }
+
+    /**
+     * 轮询提交任务的处理结果。
+     *
+     * `/resource/v1/app/upd` 是异步接口：它返回 errno=0 只代表任务已入队，
+     * 不代表版本创建成功。真正结果要查 task-state：
+     * `1` 待处理 / `2` 处理成功 / `3` 处理失败。
+     *
+     * 不查就会把「入队成功」当成「发布成功」上报 —— 而任务随后可能因为缺必传
+     * 参数、apk 包名不符、截图尺寸超标等原因静默失败，线上版本号纹丝不动。
+     * 这类假成功比明确报错更难排查：日志与退出码都是成功，只有登录后台
+     * 才发现什么也没发生。
+     */
+    private suspend fun waitSubmitResult(token: String, artifactInfo: ArtifactInfo) {
+        val versionCode = artifactInfo.versionCode.toString()
+        val params = mapOf("pkg_name" to artifactInfo.applicationId, "version_code" to versionCode)
+        val url = signedUrl("$DOMAIN/resource/v1/app/task-state", params, token, appendParamsToQuery = false)
+
+        // OPPO 文档称「接口处理可能会比较耗时，建议客户端执行等待时间设置为 10 秒以上」。
+        // 取 3 分钟上限：再久通常不是慢，而是任务卡住，继续等没有意义。
+        val interval = 3_000L
+        val deadline = System.currentTimeMillis() + 3 * 60_000L
+
+        while (true) {
+            val body = FormBody.Builder()
+                .apply { params.forEach { (k, v) -> add(k, v) } }
+                .build()
+            val responseBody = client.textResponse(
+                Request.Builder().url(url).post(body).build(),
+                CHANNEL_ID,
+            )
+            checkSuccess(responseBody, "查询任务状态")
+            val state = Json.parse<OppoTaskStateResponse>(CHANNEL_ID, responseBody)
+
+            when (state.data?.taskState) {
+                "2" -> return
+                "3" -> throw PublishError.rejected(
+                    channel = CHANNEL_ID,
+                    code = "task_state=3",
+                    message = "OPPO 处理版本更新任务失败：" +
+                        "${state.data.errMsg?.takeIf { it.isNotBlank() } ?: "未给出原因"}" +
+                        "（版本号 $versionCode）",
+                )
+            }
+
+            if (System.currentTimeMillis() > deadline) {
+                // 超时不是失败：任务可能仍在处理。报成失败会诱使使用者重试，
+                // 而重复提交会产生重复版本
+                throw PublishError.precondition(
+                    channel = CHANNEL_ID,
+                    message = "OPPO 版本更新任务在 3 分钟内未处理完" +
+                        "（当前状态 ${state.data?.taskState}）。任务可能仍在处理，" +
+                        "请稍后到 OPPO 后台确认，不要直接重试以免产生重复版本",
+                )
+            }
+            kotlinx.coroutines.delay(interval)
+        }
     }
 
     private fun buildSubmitParams(
@@ -210,6 +275,10 @@ internal class OppoMarketApi(
         val params = mutableMapOf(
             "pkg_name" to artifactInfo.applicationId,
             "version_code" to artifactInfo.versionCode.toString(),
+            // 文档标注必传；漏传会让异步任务静默失败（见 OppoAppInfoResponse.Data 注释）
+            "app_name" to required.appName,
+            "age_level" to required.ageLevel,
+            "adaptive_equipment" to required.adaptiveEquipment,
             "apk_url" to apkUrlJson,
             "update_desc" to releaseParams.updateDesc,
             // 1 审核后立即发布，2 定时发布
@@ -336,6 +405,9 @@ internal class OppoMarketApi(
         val thirdCategory: String,
         val iconUrl: String,
         val picUrl: String,
+        val appName: String,
+        val ageLevel: String,
+        val adaptiveEquipment: String,
     ) {
         companion object {
             fun from(info: OppoAppInfoResponse.Data): RequiredAppFields = RequiredAppFields(
@@ -346,6 +418,9 @@ internal class OppoMarketApi(
                 thirdCategory = info.thirdCategory.require("三级分类（ver_third_category_id）"),
                 iconUrl = info.iconUrl.require("应用图标（icon_url）"),
                 picUrl = info.picUrl.require("应用截图（pic_url）"),
+                appName = info.appName.require("应用名称（app_name）"),
+                ageLevel = info.ageLevel.require("年龄分级（age_level）"),
+                adaptiveEquipment = info.adaptiveEquipment.require("平板适配（adaptive_equipment）"),
             )
 
             private fun String?.require(label: String): String =

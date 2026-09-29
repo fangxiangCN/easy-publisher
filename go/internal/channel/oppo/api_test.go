@@ -110,9 +110,12 @@ func TestUploadFullFlowRequestShapes(t *testing.T) {
 			`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 			`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 			`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +
-			`"copyright_url":"https://c.pdf","electronic_cert_url":"https://e.pdf"}}`,
+			`"copyright_url":"https://c.pdf","electronic_cert_url":"https://e.pdf",` +
+			`"app_name":"测试应用","age_level":"12","adaptive_equipment":"4"}}`,
 		pathUploadURL: `{"errno":0,"data":{"upload_url":"` + "" + `","sign":"once-sign"}}`,
 		pathSubmit:    `{"errno":0}`,
+		// 提交是异步的：errno=0 只代表任务入队，成功后需轮询到 task_state=2
+		pathTaskState: `{"errno":0,"data":{"pkg_name":"com.example.app","version_code":"1000","task_state":"2","err_msg":""}}`,
 	})
 	// upload_url 必须指向假服务器，否则会被 requireHTTPS 拒绝（协议不符）
 	fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload",` +
@@ -129,13 +132,14 @@ func TestUploadFullFlowRequestShapes(t *testing.T) {
 	}
 
 	paths := fake.paths()
-	want := []string{pathToken, pathAppInfo, pathUploadURL, "/upload", pathSubmit}
+	// 末位是 task-state：app/upd 是异步接口，必须轮询任务结果才知道版本有没有建成
+	want := []string{pathToken, pathAppInfo, pathUploadURL, "/upload", pathSubmit, pathTaskState}
 	if len(paths) != len(want) {
 		t.Fatalf("请求次数 = %d, 期望 %d：%v", len(paths), len(want), paths)
 	}
 	for i, w := range want {
 		if paths[i] != w {
-			t.Errorf("第 %d 个请求路径 = %q, 期望 %q（顺序：token → app/info → upload-url → 上传 → 提交）",
+			t.Errorf("第 %d 个请求路径 = %q, 期望 %q（顺序：token → app/info → upload-url → 上传 → 提交 → 轮询任务）",
 				i+1, paths[i], w)
 		}
 	}
@@ -175,6 +179,8 @@ func TestSubmitSendsAllRequiredStoreFields(t *testing.T) {
 		pathUploadURL: `{"errno":0,"data":{"upload_url":"PLACEHOLDER/upload","sign":"s"}}`,
 		"/upload":     `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
 		pathSubmit:    `{"errno":0}`,
+		// 提交是异步的：errno=0 只代表任务入队，成功后需轮询到 task_state=2
+		pathTaskState: `{"errno":0,"data":{"pkg_name":"com.example.app","version_code":"1000","task_state":"2","err_msg":""}}`,
 	})
 	fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload","sign":"s"}}`
 
@@ -184,7 +190,10 @@ func TestSubmitSendsAllRequiredStoreFields(t *testing.T) {
 	}
 
 	// app/upd 是全量更新语义：漏任何一个字段就会被清空或被拒
-	submit := fake.bodies[len(fake.bodies)-1]
+	submit, ok := fake.bodyFor(pathSubmit)
+	if !ok {
+		t.Fatal("未找到提交请求")
+	}
 	form, err := url.ParseQuery(submit)
 	if err != nil {
 		t.Fatalf("提交体不是 form 编码: %v", err)
@@ -221,10 +230,11 @@ func TestSubmitSendsAllRequiredStoreFields(t *testing.T) {
 func TestCopyrightFallsBackToElectronicCert(t *testing.T) {
 	// OPPO 要求 copyright_url 非空，而多数开发者只上传了电子版软著
 	srv, fake := newFakeOppo(t, map[string]string{
-		pathToken:   `{"errno":0,"data":{"access_token":"tok"}}`,
-		pathAppInfo: strings.Replace(appInfoResponse(), `"copyright_url":"https://c.pdf"`, `"copyright_url":""`, 1),
-		"/upload":   `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
-		pathSubmit:  `{"errno":0}`,
+		pathToken:     `{"errno":0,"data":{"access_token":"tok"}}`,
+		pathAppInfo:   strings.Replace(appInfoResponse(), `"copyright_url":"https://c.pdf"`, `"copyright_url":""`, 1),
+		"/upload":     `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
+		pathSubmit:    `{"errno":0}`,
+		pathTaskState: `{"errno":0,"data":{"task_state":"2"}}`,
 	})
 	fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload","sign":"s"}}`
 
@@ -232,7 +242,8 @@ func TestCopyrightFallsBackToElectronicCert(t *testing.T) {
 	if _, err := newTestChannel(srv).Upload(context.Background(), testRequest(t, path)); err != nil {
 		t.Fatalf("Upload 失败: %v", err)
 	}
-	form, _ := url.ParseQuery(fake.bodies[len(fake.bodies)-1])
+	submitBody, _ := fake.bodyFor(pathSubmit)
+	form, _ := url.ParseQuery(submitBody)
 	if got := form.Get("copyright_url"); got != "https://e.pdf" {
 		t.Errorf("copyright_url = %q, 应当回退到电子版软著", got)
 	}
@@ -565,5 +576,101 @@ func appInfoResponse() string {
 		`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 		`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 		`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +
-		`"copyright_url":"https://c.pdf","electronic_cert_url":"https://e.pdf"}}`
+		`"copyright_url":"https://c.pdf","electronic_cert_url":"https://e.pdf",` +
+		// 发布版本接口的必传字段，缺少会让异步任务静默失败
+		`"app_name":"测试应用","age_level":"12","adaptive_equipment":"4"}}`
+}
+
+// TestSubmitPollsTaskState 覆盖 app/upd 是异步接口这一点。
+//
+// 回归背景：app/upd 返回 errno=0 只代表任务入队。若缺必传参数（如 app_name），
+// 任务会入队后静默失败 —— 而旧实现直接报告「已提交新版本」，线上版本号毫无变化。
+// 用户看到的是成功，实际什么都没发生，比明确报错更难排查。
+// 线上就是这么丢掉一次提交的，因此把「必须轮询到 task_state=2 才算成功」固化下来。
+func TestSubmitPollsTaskState(t *testing.T) {
+	t.Run("任务处理成功才算提交成功", func(t *testing.T) {
+		srv, fake := newFakeOppo(t, map[string]string{
+			pathToken:     `{"errno":0,"data":{"access_token":"tok"}}`,
+			pathAppInfo:   appInfoResponse(),
+			"/upload":     `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
+			pathSubmit:    `{"errno":0,"data":{"success":true}}`,
+			pathTaskState: `{"errno":0,"data":{"pkg_name":"com.example.app","version_code":"1000","task_state":"2","err_msg":""}}`,
+		})
+		fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload","sign":"s"}}`
+
+		stage, err := newTestChannel(srv).Upload(context.Background(), testRequest(t, testArtifactFile(t)))
+		if err != nil {
+			t.Fatalf("任务成功时不应报错: %v", err)
+		}
+		if stage != channel.StageSubmitReview {
+			t.Errorf("stage = %v, 期望 StageSubmitReview", stage)
+		}
+		// 必须真的查过任务状态
+		queried := false
+		for _, u := range fake.urls {
+			if u.Path == pathTaskState {
+				queried = true
+				break
+			}
+		}
+		if !queried {
+			t.Error("未轮询任务状态：errno=0 只代表入队，不查就无法知道版本是否真的创建")
+		}
+	})
+
+	t.Run("任务处理失败必须报错", func(t *testing.T) {
+		srv, fake := newFakeOppo(t, map[string]string{
+			pathToken:   `{"errno":0,"data":{"access_token":"tok"}}`,
+			pathAppInfo: appInfoResponse(),
+			"/upload":   `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
+			pathSubmit:  `{"errno":0,"data":{"success":true}}`,
+			// 这是线上真实见过的形态：入队成功，任务随后失败
+			pathTaskState: `{"errno":0,"data":{"pkg_name":"com.example.app","version_code":"1000",` +
+				`"task_state":"3","err_msg":"二级分类ID不能为空"}}`,
+		})
+		fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload","sign":"s"}}`
+
+		_, err := newTestChannel(srv).Upload(context.Background(), testRequest(t, testArtifactFile(t)))
+		if err == nil {
+			t.Fatal("任务处理失败时必须报错，否则会把未生效的提交当成成功")
+		}
+		if !strings.Contains(err.Error(), "二级分类ID不能为空") {
+			t.Errorf("错误信息应带上渠道给出的原因：%v", err)
+		}
+	})
+
+	t.Run("提交参数含文档要求的必传字段", func(t *testing.T) {
+		srv, fake := newFakeOppo(t, map[string]string{
+			pathToken:     `{"errno":0,"data":{"access_token":"tok"}}`,
+			pathAppInfo:   appInfoResponse(),
+			"/upload":     `{"errno":0,"data":{"url":"https://cdn/app.apk","md5":"m"}}`,
+			pathSubmit:    `{"errno":0,"data":{"success":true}}`,
+			pathTaskState: `{"errno":0,"data":{"task_state":"2"}}`,
+		})
+		fake.responses[pathUploadURL] = `{"errno":0,"data":{"upload_url":"` + srv.URL + `/upload","sign":"s"}}`
+
+		if _, err := newTestChannel(srv).Upload(context.Background(), testRequest(t, testArtifactFile(t))); err != nil {
+			t.Fatal(err)
+		}
+		var submitBody string
+		for i, u := range fake.urls {
+			if u.Path == pathSubmit {
+				submitBody = fake.bodies[i]
+				break
+			}
+		}
+		if submitBody == "" {
+			t.Fatal("未发出提交请求")
+		}
+		form, err := url.ParseQuery(submitBody)
+		if err != nil {
+			t.Fatalf("提交体不是 form 编码: %v", err)
+		}
+		// 文档 id=10999 标注必传；漏传会让异步任务静默失败
+		for _, key := range []string{"app_name", "age_level", "adaptive_equipment"} {
+			if form.Get(key) == "" {
+				t.Errorf("提交参数缺少文档标注的必传字段 %s", key)
+			}
+		}
+	})
 }

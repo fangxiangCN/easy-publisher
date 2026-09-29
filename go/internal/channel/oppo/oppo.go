@@ -3,6 +3,7 @@ package oppo
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/artifact"
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
@@ -157,6 +158,17 @@ func (c *Channel) Upload(ctx context.Context, req channel.UploadRequest) (channe
 		}, result)
 	})
 	if err != nil {
+		return 0, err
+	}
+
+	// app/upd 是异步接口：errno=0 只代表任务入队。必须轮询才能真正知道版本
+	// 有没有创建成功 —— 否则缺必传参数、截图尺寸超标之类的失败会被当成成功上报，
+	// 线上版本号纹丝不动却没有任何报错。
+	//
+	// 轮询失败意味着任务确定失败（渠道给出了原因），此时版本没有改变，
+	// 因此不算「越过送审点」，不套 AtSubmissionPoint。
+	if err := api.WaitSubmitResult(ctx, token,
+		req.ArtifactInfo.ApplicationID, strconv.FormatInt(req.ArtifactInfo.VersionCode, 10)); err != nil {
 		return 0, err
 	}
 

@@ -76,6 +76,14 @@ internal data class OppoAppInfoResponse(
         @JsonField(name = "ver_third_category_id") val thirdCategory: String? = null,
         @JsonField(name = "icon_url") val iconUrl: String? = null,
         @JsonField(name = "pic_url") val picUrl: String? = null,
+        /**
+         * 以下三个是发布版本接口的「必传」字段（OPPO 文档 id=10999）。
+         * 漏传时 app/upd 会返回 errno=0 并把任务排入队列，但异步任务随后静默失败 ——
+         * 表现为「提交成功」而线上毫无变化。
+         */
+        @JsonField(name = "app_name") val appName: String? = null,
+        @JsonField(name = "age_level") val ageLevel: String? = null,
+        @JsonField(name = "adaptive_equipment") val adaptiveEquipment: String? = null,
         /** 测试附加说明 */
         @JsonField(name = "test_desc") val testDesc: String? = null,
         /** 商务联系方式 */
@@ -86,6 +94,24 @@ internal data class OppoAppInfoResponse(
         @JsonField(name = "copyright_url") val copyrightUrl: String? = null,
         /** 电子版软著 */
         @JsonField(name = "electronic_cert_url") val electronicCertUrl: String? = null,
+    )
+}
+
+/**
+ * 提交任务的处理状态。
+ *
+ * `/resource/v1/app/upd` 是异步接口，errno=0 只代表任务入队；真正结果在这里：
+ * `taskState` 取值 1-待处理 / 2-处理成功 / 3-处理失败，失败时 `errMsg` 给出原因。
+ */
+internal data class OppoTaskStateResponse(
+    val errno: Int? = null,
+    val data: Data? = null,
+) {
+    data class Data(
+        @JsonField(name = "pkg_name") val pkgName: String? = null,
+        @JsonField(name = "version_code") val versionCode: String? = null,
+        @JsonField(name = "task_state") val taskState: String? = null,
+        @JsonField(name = "err_msg") val errMsg: String? = null,
     )
 }
 

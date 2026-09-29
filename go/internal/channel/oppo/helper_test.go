@@ -47,6 +47,18 @@ func newFakeOppo(t *testing.T, responses map[string]string) (*httptest.Server, *
 	return srv, fake
 }
 
+// bodyFor 取指定路径最后一次请求的 body。
+//
+// 不能用 bodies[len-1]：提交之后还会轮询 task-state，最后一个请求不再是提交体。
+func (f *fakeOppoServer) bodyFor(path string) (string, bool) {
+	for i := len(f.urls) - 1; i >= 0; i-- {
+		if f.urls[i].Path == path {
+			return f.bodies[i], true
+		}
+	}
+	return "", false
+}
+
 // 确认 multipart 的 boundary 常量与手工拼装的头部一致。
 // 如果 mime/multipart 改变了产出格式，这个测试会失败，
 // 提醒我们手工拼装的请求体已经不再兼容。

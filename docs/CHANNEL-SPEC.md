@@ -204,10 +204,12 @@ GET  developer/v1/token?client_id=&client_secret=   取 access_token
 GET  resource/v1/app/info                           读回商店现有资料
 GET  resource/v1/upload/get-upload-url              → 上传地址
 PUT/POST <上传地址>                                 上传 APK → url + md5
-POST resource/v1/app/upd                            送审（全量更新语义）
+POST resource/v1/app/upd                            送审（异步任务，只代表入队）
+POST resource/v1/app/task-state                     轮询任务结果 ← 缺这步会把失败当成功
 ```
 
-成功判据：`errno == 0`。
+成功判据：`app/upd` 的 `errno == 0` **只代表任务入队**；版本是否真的创建成功，
+必须轮询 `task-state` 得到 `task_state == "2"`。见下方陷阱。
 
 签名规则：参数按 key 字典序排序 → `k=v` 用 `&` 拼接 → HMAC-SHA256(secret) → 小写 hex。
 value 为 null 的项**整体跳过**（连键名也不参与）。参与签名的集合始终是
@@ -228,6 +230,18 @@ value 为 null 的项**整体跳过**（连键名也不参与）。参与签名�
   若先按成功结构解析，抛出的是解析异常，真正的错误码和 `data.message` 全被吞掉。
   这是上游 issue #18/#19 那类报错难以诊断的直接原因。
 - `copyright_url` 有回退：为空时用 `electronic_cert_url`（OPPO 要求非空，而多数开发者只上传电子版）。
+- **`app/upd` 是异步接口，`errno == 0` 不等于提交成功。** 这是本项目踩过的最贵的坑：
+  接口返回成功只表示任务已入队，任务随后可能因为缺必传参数、apk 包名不符、
+  截图尺寸超标等原因**静默失败**，线上版本号纹丝不动。
+  必须轮询 `POST resource/v1/app/task-state`（参数 `pkg_name` + `version_code`）：
+  `task_state` 为 `1` 待处理 / `2` 处理成功 / `3` 处理失败（失败时 `err_msg` 给原因）。
+  文档称处理可能较耗时，建议等待 10 秒以上；本项目取 3 分钟上限。
+  **超时不要报成失败** —— 任务可能仍在处理，报失败会诱使重试而产生重复版本。
+- **`app_name` / `age_level` / `adaptive_equipment` 是必传字段**（文档 id=10999）。
+  它们不在早期实现的参数表里，漏传会让异步任务失败 —— 而 `errno` 仍是 0。
+  `app/info` 里能读回这些值（`app_name` / `age_level` / `adaptive_equipment`）。
+- `summary` 限 13 字符以内且不能含标点与空格；`detail_desc` 不少于 20 字。
+  超限同样走异步失败路径，不会在 `app/upd` 的响应里报出来。
 - 区分两类缺失：**结构性缺失**（access_token、upload_url、sign）→ 接口变更；
   **商店资料缺失**（icon_url、summary、分类 id）→ 给可执行的中文提示
   「请先在 OPPO 开放平台补全应用信息」。

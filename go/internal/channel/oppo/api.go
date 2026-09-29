@@ -33,6 +33,7 @@ const (
 	pathAppInfo   = "/resource/v1/app/info"
 	pathUploadURL = "/resource/v1/upload/get-upload-url"
 	pathSubmit    = "/resource/v1/app/upd"
+	pathTaskState = "/resource/v1/app/task-state"
 	successCode   = 0
 	maxRaw        = 2000
 	auditOnline   = 111
@@ -77,22 +78,28 @@ type tokenResponse struct {
 
 // AppInfo 是应用信息。字段名保持与接口一致的 snake_case 映射，便于和 OPPO 文档对照。
 type AppInfo struct {
-	Summary          string           `json:"summary"`
-	DetailDesc       string           `json:"detail_desc"`
-	VersionCode      *jsonx.FlexInt64 `json:"version_code"`
-	VersionName      string           `json:"version_name"`
-	AuditStatus      *jsonx.FlexInt64 `json:"audit_status"`
-	PrivacyURL       string           `json:"privacy_source_url"`
-	SecondCategory   string           `json:"ver_second_category_id"`
-	ThirdCategory    string           `json:"ver_third_category_id"`
-	IconURL          string           `json:"icon_url"`
-	PicURL           string           `json:"pic_url"`
-	TestDesc         string           `json:"test_desc"`
-	BusinessUsername string           `json:"business_username"`
-	BusinessEmail    string           `json:"business_email"`
-	BusinessMobile   string           `json:"business_mobile"`
-	CopyrightURL     string           `json:"copyright_url"`
-	ElectronicCert   string           `json:"electronic_cert_url"`
+	Summary        string           `json:"summary"`
+	DetailDesc     string           `json:"detail_desc"`
+	VersionCode    *jsonx.FlexInt64 `json:"version_code"`
+	VersionName    string           `json:"version_name"`
+	AuditStatus    *jsonx.FlexInt64 `json:"audit_status"`
+	PrivacyURL     string           `json:"privacy_source_url"`
+	SecondCategory string           `json:"ver_second_category_id"`
+	ThirdCategory  string           `json:"ver_third_category_id"`
+	IconURL        string           `json:"icon_url"`
+	PicURL         string           `json:"pic_url"`
+	// 以下三个是发布版本接口的「必传」字段（见 OPPO 文档 id=10999 的更新说明）。
+	// 漏传时 app/upd 会返回 errno=0 并把任务排入队列，但异步任务随后静默失败 ——
+	// 表现为「提交成功」而线上毫无变化，只有查 task-state 才能发现。
+	AppName           string `json:"app_name"`
+	AgeLevel          string `json:"age_level"`
+	AdaptiveEquipment string `json:"adaptive_equipment"`
+	TestDesc          string `json:"test_desc"`
+	BusinessUsername  string `json:"business_username"`
+	BusinessEmail     string `json:"business_email"`
+	BusinessMobile    string `json:"business_mobile"`
+	CopyrightURL      string `json:"copyright_url"`
+	ElectronicCert    string `json:"electronic_cert_url"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -376,6 +383,120 @@ func (a *API) Submit(
 	return a.checkSuccess(body, "提交版本", true)
 }
 
+// --- 异步任务状态 ---
+
+// taskStates 是 /resource/v1/app/task-state 的取值。
+const (
+	taskPending = "1" // 待处理
+	taskSucceed = "2" // 处理成功
+	taskFailed  = "3" // 处理失败
+)
+
+type taskStateResp struct {
+	PkgName     string `json:"pkg_name"`
+	VersionCode string `json:"version_code"`
+	TaskState   string `json:"task_state"`
+	ErrMsg      string `json:"err_msg"`
+}
+
+// WaitSubmitResult 轮询提交任务的处理结果。
+//
+// # 为什么必须轮询
+//
+// `/resource/v1/app/upd` 是**异步**接口：它返回 errno=0 只代表任务已入队，
+// 不代表版本创建成功。真正结果要查 task-state：
+//
+//	1 待处理 / 2 处理成功 / 3 处理失败
+//
+// 不查就会把「入队成功」当成「发布成功」上报 —— 而任务随后可能因为缺必传
+// 参数、apk 包名不符、截图尺寸超标等原因静默失败，线上版本号纹丝不动。
+// 这类假成功比明确报错更难排查：日志与退出码都是成功，只有登录后台才发现
+// 什么也没发生。
+//
+// 返回 nil 表示任务确实处理成功；失败时返回带渠道原因的错误。
+func (a *API) WaitSubmitResult(
+	ctx context.Context,
+	token, applicationID, versionCode string,
+) error {
+	const (
+		interval = 3 * time.Second
+		// OPPO 文档称「接口处理可能会比较耗时，建议客户端执行等待时间设置为 10 秒以上」。
+		// 取 3 分钟上限：再久通常不是慢，而是任务卡住，继续等没有意义。
+		timeout = 3 * time.Minute
+	)
+
+	deadline := time.Now().Add(timeout)
+	var last taskStateResp
+
+	for {
+		state, err := a.getTaskState(ctx, token, applicationID, versionCode)
+		if err != nil {
+			return err
+		}
+		last = state
+
+		switch state.TaskState {
+		case taskSucceed:
+			return nil
+		case taskFailed:
+			msg := strings.TrimSpace(state.ErrMsg)
+			if msg == "" {
+				msg = "OPPO 未给出失败原因"
+			}
+			return eperr.RejectedError(ID, "task_state="+taskFailed,
+				"OPPO 处理版本更新任务失败：%s（版本号 %s）", msg, versionCode)
+		}
+
+		if time.Now().After(deadline) {
+			// 超时不是失败：任务可能仍在处理，只是比预期慢。
+			// 报成「失败」会诱使使用者重试，而重复提交会产生重复版本。
+			return eperr.PreconditionError(ID,
+				"OPPO 版本更新任务在 %s 内未处理完（当前状态 %q）。"+
+					"任务可能仍在处理，请稍后到 OPPO 后台确认，不要直接重试以免产生重复版本",
+				timeout, last.TaskState)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+func (a *API) getTaskState(
+	ctx context.Context,
+	token, applicationID, versionCode string,
+) (taskStateResp, error) {
+	params := map[string]string{
+		"pkg_name":     applicationID,
+		"version_code": versionCode,
+	}
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+	req, err := a.signedRequest(ctx, http.MethodPost, a.baseURL+pathTaskState,
+		params, token, false, strings.NewReader(form.Encode()))
+	if err != nil {
+		return taskStateResp{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	body, err := httpx.Do(a.client, req, ID)
+	if err != nil {
+		return taskStateResp{}, err
+	}
+	if err := a.checkSuccess(body, "查询任务状态", true); err != nil {
+		return taskStateResp{}, err
+	}
+	var resp taskStateResp
+	if err := unmarshalData(body, &resp); err != nil {
+		return taskStateResp{}, err
+	}
+	return resp, nil
+}
+
 // buildSubmitParams 构造提交版本的全量参数。
 func buildSubmitParams(
 	info artifact.Info,
@@ -399,8 +520,12 @@ func buildSubmitParams(
 	}
 
 	params := map[string]string{
-		"pkg_name":           info.ApplicationID,
-		"version_code":       strconv.FormatInt(info.VersionCode, 10),
+		"pkg_name":     info.ApplicationID,
+		"version_code": strconv.FormatInt(info.VersionCode, 10),
+		// 文档标注必传；缺失会让异步任务静默失败（见 AppInfo 里同名字段的注释）
+		"app_name":           required.appName,
+		"age_level":          required.ageLevel,
+		"adaptive_equipment": required.adaptiveEquipment,
 		"apk_url":            apkURLJSON,
 		"update_desc":        release.UpdateDesc,
 		"online_type":        onlineType,
@@ -432,6 +557,7 @@ func buildSubmitParams(
 type requiredFields struct {
 	summary, detailDesc, privacyURL                string
 	secondCategory, thirdCategory, iconURL, picURL string
+	appName, ageLevel, adaptiveEquipment           string
 }
 
 // requireAppFields 校验提交版本必须回传的商店资料。
@@ -451,6 +577,9 @@ func requireAppFields(info AppInfo) (requiredFields, error) {
 		{"三级分类（ver_third_category_id）", info.ThirdCategory},
 		{"应用图标（icon_url）", info.IconURL},
 		{"应用截图（pic_url）", info.PicURL},
+		{"应用名称（app_name）", info.AppName},
+		{"年龄分级（age_level）", info.AgeLevel},
+		{"平板适配（adaptive_equipment）", info.AdaptiveEquipment},
 	}
 	for _, c := range checks {
 		if strings.TrimSpace(c.value) == "" {
@@ -460,13 +589,16 @@ func requireAppFields(info AppInfo) (requiredFields, error) {
 		}
 	}
 	return requiredFields{
-		summary:        info.Summary,
-		detailDesc:     info.DetailDesc,
-		privacyURL:     info.PrivacyURL,
-		secondCategory: info.SecondCategory,
-		thirdCategory:  info.ThirdCategory,
-		iconURL:        info.IconURL,
-		picURL:         info.PicURL,
+		summary:           info.Summary,
+		detailDesc:        info.DetailDesc,
+		privacyURL:        info.PrivacyURL,
+		secondCategory:    info.SecondCategory,
+		thirdCategory:     info.ThirdCategory,
+		iconURL:           info.IconURL,
+		picURL:            info.PicURL,
+		appName:           info.AppName,
+		ageLevel:          info.AgeLevel,
+		adaptiveEquipment: info.AdaptiveEquipment,
 	}, nil
 }
 
