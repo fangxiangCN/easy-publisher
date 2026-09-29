@@ -143,10 +143,16 @@ var defaults = map[string]string{
 		`{"packageName":"com.example.app","appId":"app-123"}]}`,
 	"/openapi/v1/publish/get-app-detail": `{"code":0,"msg":"ok","data":{` +
 		`"languageInfo":[{"languageId":"zh-CN","appName":"示例应用","intro":"介绍","briefIntro":"简述"}],` +
-		`"releaseInfo":{"versionCode":1000,"versionName":"1.0.0"}}}`,
+		`"releaseInfo":{"versionCode":1000,"versionName":"1.0.0"},` +
+		// basicInfo 是必须的：年龄分级未设置时送审会被拒（code=20046）
+		`"basicInfo":{"ratingId":3,"appClassification":"11002",` +
+		`"supplyName":"示例公司","supplyNameEn":"","devName":"示例公司","devNameEn":"",` +
+		`"appCategoryId":2,"defaultLanguage":"zh-CN","releaseCountry":"CN",` +
+		`"gameType":2,"paymentInfo":1,"privacyPolicyUrl":"https://p.example.com"}}}`,
 	"/openapi/v1/publish/update-file-info":     `{"code":0,"msg":"ok"}`,
 	"/openapi/v1/publish/update-language-info": `{"code":0,"msg":"ok"}`,
 	"/openapi/v1/publish/submit-audit":         `{"code":0,"msg":"ok"}`,
+	"/openapi/v1/publish/update-app-info":      `{"code":0,"msg":"ok"}`,
 }
 
 // uploadPath 是假网关上的上传地址路径。
@@ -204,6 +210,8 @@ func TestUploadFullFlowCallOrder(t *testing.T) {
 		uploadPath,
 		"/openapi/v1/publish/update-file-info",
 		"/openapi/v1/publish/update-language-info",
+		// 送审前再查一次应用详情：确认年龄分级已设置（未设置会被送审拒绝）
+		"/openapi/v1/publish/get-app-detail",
 		"/openapi/v1/publish/submit-audit",
 	}
 	got := fake.paths()
@@ -779,4 +787,60 @@ func TestRealResponseShapesAreParsed(t *testing.T) {
 	} else {
 		t.Error("未发出 get-app-current-release 请求")
 	}
+}
+
+// TestEnsureRating 覆盖年龄分级（RatingId）的自动补齐。
+//
+// 回归背景：荣耀的年龄分级是送审的必填前置，未设置时 submit-audit 返回
+// `app rating id is empty (code=20046)` —— 提示里既不说去哪设置、也不说是哪个字段。
+// 实测只能靠比对 get-app-detail 的 basicInfo.ratingId 是否为 null 定位。
+// 线上 civilian 就卡在这个错误上，而 gwy 因为早期在后台设过所以正常。
+func TestEnsureRating(t *testing.T) {
+	t.Run("未设置时补齐并调用 update-app-info", func(t *testing.T) {
+		ch, fake := newFakeHonor(t)
+		fake.set("/openapi/v1/publish/get-app-detail",
+			`{"code":0,"msg":"ok","data":{"languageInfo":[{"languageId":"zh-CN","appName":"x"}],`+
+				`"basicInfo":{"ratingId":null,"appClassification":"11002","supplyName":"公司",`+
+				`"defaultLanguage":"zh-CN","releaseCountry":"CN","paymentInfo":1}}}`)
+
+		fixed, err := testAPI(ch).EnsureRating(context.Background(), "tok", "app-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fixed {
+			t.Error("ratingId 为 null 时应上报「已补齐」")
+		}
+		if _, ok := fake.find("update-app-info"); !ok {
+			t.Error("未调用 update-app-info，年龄分级不会被设置")
+		}
+	})
+
+	t.Run("已设置时不写入", func(t *testing.T) {
+		ch, fake := newFakeHonor(t)
+		// 默认 fixture 的 basicInfo.ratingId = 3
+		fixed, err := testAPI(ch).EnsureRating(context.Background(), "tok", "app-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixed {
+			t.Error("已设置时不应写入 —— 会覆盖运营在后台选定的等级")
+		}
+		if _, ok := fake.find("update-app-info"); ok {
+			t.Error("已设置 ratingId 时不应调用 update-app-info")
+		}
+	})
+
+	t.Run("缺 basicInfo 时报错而非静默", func(t *testing.T) {
+		ch, fake := newFakeHonor(t)
+		fake.set("/openapi/v1/publish/get-app-detail",
+			`{"code":0,"msg":"ok","data":{"languageInfo":[]}}`)
+		if _, err := testAPI(ch).EnsureRating(context.Background(), "tok", "app-1"); err == nil {
+			t.Fatal("缺 basicInfo 时应报错：此时写入会误清空应用资料")
+		}
+	})
+}
+
+// testAPI 用假网关构造 API 实例，供不经过 Channel.Upload 的单元测试使用。
+func testAPI(ch *Channel) *API {
+	return NewAPI(ch.client(httpx.Default()), ch.baseURL, ch.tokenURL)
 }

@@ -237,6 +237,7 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
     }
 
     private suspend fun submit(token: String, appId: String, onlineTime: Long) {
+        ensureRating(token, appId)
         val params = if (onlineTime > 0) {
             // 荣耀要求 yyyy-MM-dd'T'HH:mm:ssZZ。显式指定 Locale.US，
             // 否则在阿拉伯语等 locale 下会输出非 ASCII 数字导致渠道解析失败
@@ -249,6 +250,38 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
         atSubmissionPoint("荣耀", "提交审核") {
             call("提交审核") { api.submit(token, appId, params) }.throwOnFail("提交审核")
         }
+    }
+
+    /**
+     * 确保应用已设置年龄分级（ratingId）。
+     *
+     * 荣耀的年龄分级是送审的必填前置。未设置时 submit-audit 返回
+     * `app rating id is empty (code=20046)` —— 提示里既不说去哪设置、
+     * 也不说是哪个字段，实测只能靠比对 get-app-detail 的 basicInfo.ratingId
+     * 是否为 null 定位。因此在这里主动补齐，避免发布卡在一个无法自助定位的错误上。
+     *
+     * 已设置时不做任何写入：会覆盖运营在后台选定的等级。
+     * 写入采用「读-改-写」：update-app-info 是全量更新，只传 ratingId 会被拒
+     * （逐个报 supplyName / defaultLanguage / releaseCountry 为空）。
+     */
+    private suspend fun ensureRating(token: String, appId: String) {
+        val detail = call("获取App信息") { api.getAppInfo(token, appId) }
+            .requireData("获取App信息")
+        val basic = detail.basicInfo
+            ?: throw PublishError.protocol(
+                channel = HONOR_CHANNEL_ID,
+                message = "荣耀应用详情未返回 basicInfo，无法确认年龄分级状态",
+            )
+        if (basic.ratingId != null) return
+
+        call("设置年龄分级") {
+            api.updateAppInfo(token, appId, basic.copy(ratingId = DEFAULT_RATING_ID))
+        }.throwOnFail("设置年龄分级")
+        AppLogger.info(
+            LOG_TAG,
+            "荣耀应用未设置年龄分级，已补为默认值（${DEFAULT_RATING_ID}+）。" +
+                "如需其他等级请在荣耀开发者后台修改",
+        )
     }
 
     /**
@@ -289,5 +322,7 @@ internal class HonorConnectClient(private val timeouts: HttpTimeouts) {
         const val APK_FILE_TYPE = 100
         const val APK_MEDIA_TYPE = "application/vnd.android.package-archive"
         const val MAX_RAW_LENGTH = 2000
+        /** 默认年龄分级 3+（年满 3 周岁）；题库类应用适用，敏感内容应在后台另选 */
+        const val DEFAULT_RATING_ID = 3
     }
 }

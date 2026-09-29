@@ -42,6 +42,7 @@ const (
 	pathUpdateFileInfo    = "openapi/v1/publish/update-file-info"
 	pathUpdateLanguage    = "openapi/v1/publish/update-language-info"
 	pathSubmitAudit       = "openapi/v1/publish/submit-audit"
+	pathUpdateAppInfo     = "openapi/v1/publish/update-app-info"
 )
 
 // result 是荣耀的通用响应包装。
@@ -116,6 +117,32 @@ type appIDEntry struct {
 type AppInfo struct {
 	LanguageInfo []LanguageInfo  `json:"languageInfo"`
 	ReleaseInfo  *PubReleaseInfo `json:"releaseInfo"`
+	BasicInfo    *BasicInfo      `json:"basicInfo"`
+}
+
+// BasicInfo 是应用的基础信息。
+//
+// 其中 RatingId 是**年龄分级**（3+ / 8+ / 12+ 等，取值见荣耀的年龄分级标准）。
+// 它会阻塞送审：submit-audit 要求该字段非空，为空时报
+// `app rating id is empty (code=20046)` —— 而提示里完全没说是哪个字段、
+// 也没说去哪设置，只能靠 get-app-detail 的返回比对出来。
+//
+// 其余字段是 update-app-info 的必填项。该接口是全量更新语义，
+// 改一个字段也要把整份资料回传，因此全部保留。
+type BasicInfo struct {
+	AppCategoryId     *int   `json:"appCategoryId"`
+	AppClassification string `json:"appClassification"`
+	SupplyName        string `json:"supplyName"`
+	SupplyNameEn      string `json:"supplyNameEn"`
+	DevName           string `json:"devName"`
+	DevNameEn         string `json:"devNameEn"`
+	DefaultLanguage   string `json:"defaultLanguage"`
+	ReleaseCountry    string `json:"releaseCountry"`
+	GameType          *int   `json:"gameType"`
+	PaymentInfo       *int   `json:"paymentInfo"`
+	PrivacyPolicyUrl  string `json:"privacyPolicyUrl"`
+	// RatingId 为 nil 表示尚未设置年龄分级，会导致送审被拒
+	RatingId *int `json:"ratingId"`
 }
 
 // LanguageInfo 是语言信息。改更新说明时要回填其中的 appName / intro。

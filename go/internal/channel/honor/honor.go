@@ -151,6 +151,19 @@ func (c *Channel) Upload(ctx context.Context, req channel.UploadRequest) (channe
 		return channel.StageCreateDraft, nil
 	}
 
+	// 年龄分级是送审的必填前置。未设置时 submit-audit 报 `app rating id is empty`，
+	// 而该错误的提示里既不说去哪设、也不说是哪个字段 —— 实测只能靠比对
+	// get-app-detail 的 basicInfo.ratingId 是否为 null 才能定位。
+	// 因此在这里主动补齐：已设置则不动，避免覆盖运营在后台选定的等级。
+	fixed, err := api.EnsureRating(ctx, token, appID)
+	if err != nil {
+		return 0, err
+	}
+	if fixed {
+		logx.Info("荣耀应用未设置年龄分级，已补为默认值（3+）。"+
+			"如需其他等级请在荣耀开发者后台修改", "ratingId", DefaultRatingId)
+	}
+
 	// 送审不可撤销，之后的失败一律标记为不可重试
 	err = eperr.AtSubmissionPoint(ctx, ID, "荣耀", "提交审核", func(ctx context.Context) error {
 		return api.Submit(ctx, token, appID, req.ReleaseParams.OnlineTime)

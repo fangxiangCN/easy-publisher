@@ -55,7 +55,34 @@ data class HonorAppId(
 data class HonorAppInfo(
     @Json(name = "languageInfo") val languageInfo: List<LanguageInfo>? = null,
     @Json(name = "releaseInfo") val releaseInfo: PubReleaseInfo? = null,
+    @Json(name = "basicInfo") val basicInfo: BasicInfo? = null,
 ) {
+    /**
+     * 应用基础信息。
+     *
+     * `ratingId` 是**年龄分级**（3+ / 8+ / 12+ 等）。它阻塞送审：未设置时
+     * submit-audit 返回 `app rating id is empty (code=20046)`，而提示里既不说
+     * 去哪设置、也不说是哪个字段 —— 实测只能靠比对本字段是否为 null 定位。
+     *
+     * 其余字段是 update-app-info 的必填项（该接口是全量更新语义，
+     * 改一个字段也要把整份资料回传）。
+     */
+    data class BasicInfo(
+        @Json(name = "appCategoryId") val appCategoryId: Int? = null,
+        @Json(name = "appClassification") val appClassification: String? = null,
+        @Json(name = "supplyName") val supplyName: String? = null,
+        @Json(name = "supplyNameEn") val supplyNameEn: String? = null,
+        @Json(name = "devName") val devName: String? = null,
+        @Json(name = "devNameEn") val devNameEn: String? = null,
+        @Json(name = "defaultLanguage") val defaultLanguage: String? = null,
+        @Json(name = "releaseCountry") val releaseCountry: String? = null,
+        @Json(name = "gameType") val gameType: Int? = null,
+        @Json(name = "paymentInfo") val paymentInfo: Int? = null,
+        @Json(name = "privacyPolicyUrl") val privacyPolicyUrl: String? = null,
+        /** 为 null 表示尚未设置年龄分级，会导致送审被拒 */
+        @Json(name = "ratingId") val ratingId: Int? = null,
+    )
+
     data class LanguageInfo(
         @Json(name = "languageId") val languageId: String? = null,
         @Json(name = "appName") val appName: String? = null,

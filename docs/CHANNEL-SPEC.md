@@ -87,6 +87,8 @@ POST openapi/v1/publish/get-file-upload-url        → 上传地址 + objectId�
 POST <上传地址>                                    multipart，字段名 "file"
 POST openapi/v1/publish/update-file-info           绑定，需 fileSha256
 POST openapi/v1/publish/update-language-info       更新说明（依赖上一步取到的语言信息）
+GET  openapi/v1/publish/get-app-detail              再查一次，确认年龄分级已有值
+POST openapi/v1/publish/update-app-info             仅在 ratingId 为空时：补齐年龄分级
 POST openapi/v1/publish/submit-audit               送审
 ```
 
@@ -104,6 +106,19 @@ POST openapi/v1/publish/submit-audit               送审
 - `languageInfo` 可能为空列表，`.first()` 会抛异常。
 - `releaseType`：1 审核通过后立即发布，2 定时发布（此时 `releaseTime` 必填）。
 - 上传用 multipart 表单（字段名 `file`），与华为的裸 PUT 不同。
+- **`ratingId`（年龄分级）是送审的必填前置，未设置时送审报 `app rating id is empty`
+  （code=20046）。** 这个错误的提示里既不说去哪设置、也不说是哪个字段，只能靠
+  比对 `get-app-detail` 的 `basicInfo.ratingId` 是否为 `null` 定位 —— 线上就有一个
+  应用卡在这里，另一个因为早期在后台设过所以正常，看起来像「同一个错误时灵时不灵」。
+
+  设置方式是 `update-app-info`（**全量更新语义**）：只传 `ratingId` 会被拒，
+  要逐个补齐 `appClassification`、`supplyName`、`defaultLanguage`、`releaseCountry`、
+  `paymentInfo`、`privacyPolicyUrl` 等十来个字段。正确做法是**读-改-写** ——
+  从 `get-app-detail` 读回 `basicInfo`，只改 `ratingId`，整份送回。
+  不返回 `basicInfo` 时应当报错而不是继续写，否则会把应用资料清空。
+
+  取值是荣耀的年龄分级标准（3+ / 8+ / 12+ / 16+ / 18+）。工具默认 3+（题库类适用），
+  **仅在为空时写入**，避免覆盖运营在后台选定的等级。
 
 ## 鸿蒙 AppGallery（`harmony`）
 

@@ -83,6 +83,19 @@ interface HonorConnectApi {
         @Body versionDesc: HonorVersionDesc,
     ): HonorResult<Any?>
 
+    /**
+     * 更新应用基础信息（全量更新语义）。
+     *
+     * 用于设置年龄分级。该接口要求整份资料回传，漏字段会逐个报「xxx is empty」，
+     * 因此调用方必须先从 get-app-detail 读回，改字段后再送回。
+     */
+    @POST("openapi/v1/publish/update-app-info")
+    suspend fun updateAppInfo(
+        @Header("Authorization") token: String,
+        @Query("appId") appId: String,
+        @Body info: HonorAppInfo.BasicInfo,
+    ): HonorResult<Any?>
+
     /** 提交审核 */
     @POST("openapi/v1/publish/submit-audit")
     suspend fun submit(

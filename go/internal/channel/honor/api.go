@@ -315,6 +315,62 @@ func (a *API) UpdateVersionDesc(
 	return res.checkSuccess("修改新版本更新描述")
 }
 
+// UpdateAppInfo 更新应用基础信息（全量更新语义）。
+//
+// 用于设置 RatingId（年龄分级）。该接口要求把整份资料回传，
+// 漏字段会逐个报「xxx is empty」，因此调用方应从 get-app-detail 读回后改字段再送回。
+func (a *API) UpdateAppInfo(ctx context.Context, token, appID string, info BasicInfo) error {
+	body, err := a.postJSON(ctx, a.url(pathUpdateAppInfo, map[string]string{"appId": appID}),
+		token, info)
+	if err != nil {
+		return err
+	}
+	res, err := unmarshal[result[any]](body, "更新应用信息")
+	if err != nil {
+		return err
+	}
+	return res.checkSuccess("更新应用信息")
+}
+
+// DefaultRatingId 是默认年龄分级，取保守值 3+（年满 3 周岁）。
+//
+// 荣耀的年龄分级是**必填**项，未设置会被 submit-audit 拒绝：
+// `app rating id is empty (code=20046)`。这个错误提示里既没说去哪设置，
+// 也没说是哪个字段（get-app-detail 的 basicInfo.ratingId 为 null），
+// 因此工具在提交前主动补齐，避免发布卡在一个无法自助定位的错误上。
+//
+// 3+ 适用于不含暴力、惊吓、不良用语的应用 —— 题库类属于此列。
+// 若应用内容更敏感，应在荣耀后台选择对应等级后本工具不会覆盖（见 EnsureRating）。
+const DefaultRatingId = 3
+
+// EnsureRating 确保应用已设置年龄分级；未设置时补为 DefaultRatingId。
+//
+// 采用「读-改-写」：update-app-info 是全量更新，只传 ratingId 会被拒
+// （逐个报 supplyName / defaultLanguage / releaseCountry 等为空），
+// 因此必须把当前值全部回传。已设置时不做任何写入。
+func (a *API) EnsureRating(ctx context.Context, token, appID string) (bool, error) {
+	info, err := a.GetAppInfo(ctx, token, appID)
+	if err != nil {
+		return false, err
+	}
+	if info.BasicInfo == nil {
+		// 接口没返回 basicInfo —— 说明结构变了，不要让后续写入误清空资料
+		return false, eperr.ProtocolError(ID,
+			"荣耀应用详情未返回 basicInfo，无法确认年龄分级状态")
+	}
+	if info.BasicInfo.RatingId != nil {
+		return false, nil
+	}
+
+	b := *info.BasicInfo
+	rating := DefaultRatingId
+	b.RatingId = &rating
+	if err := a.UpdateAppInfo(ctx, token, appID, b); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Submit 提交审核。
 //
 // releaseType：1 全网发布，2 指定时间发布（此时 releaseTime 必填）。
