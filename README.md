@@ -68,7 +68,7 @@ easy-publisher status --app com.example.app
 # 4. 发版
 easy-publisher upload --app com.example.app --artifact ./app-release.apk --desc "修复若干问题"
 
-# 鸿蒙（.app 包，只会创建草稿，不送审）
+# 鸿蒙（.app 包，app_id 需单独配置）
 easy-publisher channel set --app com.example.harmony --channel harmony --key app_id --value 123456
 easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "修复若干问题"
 ```
@@ -207,8 +207,15 @@ stdout 被传输层独占：进程启动时先把真正的 fd 1 交给 transport
 ## 构建与测试
 
 ```bash
-./gradlew build          # 编译 + 测试
-./gradlew :core:test     # 只跑测试
+# Go 版
+cd go
+go build ./...
+go test ./...            # 288 个测试
+go test ./... -race      # 并发路径的验证，编排层有并发
+go vet ./...
+
+# Kotlin 版（参照实现）
+./gradlew build
 ```
 
 ## 已知限制
