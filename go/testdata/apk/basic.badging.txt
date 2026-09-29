@@ -1,0 +1,1 @@
+package: name='com.example.goldentest' versionCode='1020' versionName='1.2.0' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'

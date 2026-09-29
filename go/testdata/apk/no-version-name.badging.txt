@@ -1,0 +1,1 @@
+package: name='com.example.onlycode' versionCode='7' versionName='' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'
