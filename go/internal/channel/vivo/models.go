@@ -2,6 +2,7 @@ package vivo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -122,6 +123,13 @@ func (e envelope) ensureSuccess(action, raw string) error {
 	}
 }
 
+// codeBusy 是「应用处理中，请勿重复提交」。
+//
+// 实测它的真实含义不是「前一次提交未完成」，而是**按包名的查询频率限制**：
+// 同一包名在数秒内重复调用 app.query.details 就会返回它，换一个包名则不受影响，
+// 静默几秒后自动恢复。官方公共返回码表（doc/330）里没有这个码，所以文档看不出。
+const codeBusy = "11010"
+
 // apkResult 是上传接口的 data。
 //
 // 全部字段可空：上游在构造函数里链式取 `obj.get("x").asString`，任一 key 缺失即 NPE，
@@ -229,4 +237,19 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:maxRaw] + "…"
+}
+
+// isBusyCode 判断错误是否为 vivo 的「应用处理中」频率限制。
+//
+// 实测该码是按包名的查询频率限制：同一包名数秒内重复查询即触发，
+// 换包名不受影响，静默几秒自动恢复。因此**可以安全重试** ——
+// 它不代表有提交在进行（否则换包名也会被拦，且不会几秒就恢复）。
+//
+// 官方返回码表（doc/330）没有这个码，只能靠实测确认语义。
+func isBusyCode(err error) bool {
+	var pe *eperr.Error
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return pe.Code == codeBusy
 }

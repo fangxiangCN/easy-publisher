@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/artifact"
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
@@ -20,6 +21,42 @@ const (
 
 	logTag = "vivo应用市场"
 )
+
+// getAppInfoWithRetry 查询应用详情，遇 11010 频率限制时自动重试。
+//
+// 为什么需要在渠道层重试：vivo 的「应用处理中，请勿重复提交」实测是**按包名的
+// 查询频率限制** —— 同一包名数秒内重复查询即触发，换包名不受影响，静默几秒
+// 自动恢复。而发布流程本身会连续查询（校验一次、上传后再查一次），
+// 必然撞上；此前它直接把整个发布任务判为失败。
+//
+// 重试是安全的：该码不代表有提交在进行，只是限流。若真的代表「有任务在跑」，
+// 换包名查询也会被拦，且不会几秒就恢复 —— 实测两者都不成立。
+func getAppInfoWithRetry(ctx context.Context, api *API, packageName string) (appInfo, error) {
+	const (
+		attempts = 5
+		interval = 5 * time.Second
+	)
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		info, err := api.GetAppInfo(ctx, packageName)
+		if err == nil {
+			return info, nil
+		}
+		if !isBusyCode(err) {
+			return appInfo{}, err
+		}
+		lastErr = err
+		if i < attempts-1 {
+			logx.Debug("vivo 查询被限流，稍后重试", "attempt", i+1, "max", attempts)
+			select {
+			case <-ctx.Done():
+				return appInfo{}, ctx.Err()
+			case <-time.After(interval):
+			}
+		}
+	}
+	return appInfo{}, lastErr
+}
 
 // Channel 是 vivo 应用市场渠道。
 //
@@ -102,7 +139,7 @@ func (c *Channel) Upload(ctx context.Context, req channel.UploadRequest) (channe
 	// 保持原实现的请求顺序：先查详情再上传。查询会提前暴露包名不属于本账号、
 	// 凭据失效这类问题，避免白传一个上百兆的包才失败。
 	info, err := step("获取应用信息", func() (appInfo, error) {
-		return api.GetAppInfo(ctx, packageName)
+		return getAppInfoWithRetry(ctx, api, packageName)
 	})
 	if err != nil {
 		return 0, err
@@ -153,7 +190,7 @@ func (c *Channel) QueryMarket(ctx context.Context, q channel.MarketQuery) (chann
 	}
 	api := NewAPI(accessKey, accessSecret, httpx.Client(q.Timeouts), c.baseURL)
 
-	info, err := api.GetAppInfo(ctx, q.ApplicationID)
+	info, err := getAppInfoWithRetry(ctx, api, q.ApplicationID)
 	if err != nil {
 		return channel.MarketInfo{}, err
 	}

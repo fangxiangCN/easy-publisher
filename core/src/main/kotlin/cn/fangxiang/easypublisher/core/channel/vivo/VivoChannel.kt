@@ -17,6 +17,7 @@ import cn.fangxiang.easypublisher.core.log.redact
 import cn.fangxiang.easypublisher.core.net.HttpClients
 import cn.fangxiang.easypublisher.core.net.HttpTimeouts
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 /**
  * vivo 应用市场渠道。
@@ -61,7 +62,7 @@ class VivoChannel : Channel {
 
         // 保持原实现的请求顺序：先查详情再上传。查询会提前暴露包名不属于本账号、
         // 凭据失效这类问题，避免白传一个上百兆的包才失败。
-        val appInfo = step("获取应用信息") { api.getAppInfo(packageName) }
+        val appInfo = step("获取应用信息") { getAppInfoWithRetry(api, packageName) }
         AppLogger.info(
             LOG_TAG,
             "vivo 线上状态：${appInfo.toMarketInfo().reviewState.label}，" +
@@ -85,7 +86,42 @@ class VivoChannel : Channel {
 
     override suspend fun queryMarket(query: MarketQuery): MarketInfo {
         val api = api(query.credentials, query.timeouts)
-        return step("获取应用信息") { api.getAppInfo(query.applicationId) }.toMarketInfo()
+        return step("获取应用信息") { getAppInfoWithRetry(api, query.applicationId) }.toMarketInfo()
+    }
+
+    /**
+     * 查询应用详情，遇 11010 频率限制时自动重试。
+     *
+     * vivo 的「应用处理中，请勿重复提交」实测是**按包名的查询频率限制**：
+     * 同一包名数秒内重复调用 app.query.details 即触发，换包名不受影响，
+     * 静默几秒自动恢复。而发布流程本身会连续查询，必然撞上 ——
+     * 此前它直接把整个发布任务判为失败。
+     *
+     * 重试是安全的：该码不代表有提交在进行。若真代表「有任务在跑」，
+     * 换包名查询也会被拦，且不会几秒就恢复 —— 实测两者都不成立。
+     *
+     * 官方返回码表（doc/330）没有这个码，语义只能靠实测确认。
+     */
+    private suspend fun getAppInfoWithRetry(
+        api: VivoMarketApi,
+        packageName: String,
+    ): VivoAppInfo {
+        val attempts = 5
+        val interval = 5_000L
+        var lastError: PublishError? = null
+        repeat(attempts) { i ->
+            try {
+                return api.getAppInfo(packageName)
+            } catch (e: PublishError) {
+                if (e.code != BUSY_CODE) throw e
+                lastError = e
+                if (i < attempts - 1) {
+                    AppLogger.debug(LOG_TAG, "查询被限流（11010），${interval / 1000}s 后重试（第 ${i + 1}/$attempts 次）")
+                    delay(interval)
+                }
+            }
+        }
+        throw lastError ?: PublishError.protocol(ID, "查询应用详情重试后仍未成功")
     }
 
     private fun api(credentials: ChannelCredentials, timeouts: HttpTimeouts): VivoMarketApi {
@@ -133,5 +169,8 @@ class VivoChannel : Channel {
         private const val ACCESS_SECRET = "access_secret"
 
         private const val LOG_TAG = "vivo应用市场"
+
+        /** 「应用处理中，请勿重复提交」—— 实测为按包名的查询频率限制，可安全重试 */
+        private const val BUSY_CODE = "11010"
     }
 }

@@ -591,3 +591,64 @@ func methods(reqs []recordedRequest) []string {
 	}
 	return out
 }
+
+// TestAppInfoRetriesOnBusyCode 覆盖 vivo 的「应用处理中，请勿重复提交」（11010）。
+//
+// 回归背景：实测该码不是「有提交在进行」，而是**按包名的查询频率限制** ——
+// 同一包名数秒内重复查 app.query.details 即触发，换包名不受影响，静默几秒恢复。
+// 而发布流程会连续查询（校验一次、上传相关再查），必然撞上，
+// 此前它直接把整个发布任务判为失败。
+//
+// 这里用一个先返回 11010、后返回成功的假服务，断言重试真的发生且最终成功。
+func TestAppInfoRetriesOnBusyCode(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			// 第一次：频率限制
+			_, _ = w.Write([]byte(`{"code":0,"subCode":11010,"subMsg":"应用处理中，请勿重复提交"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"subCode":0,"msg":"ok",` +
+			`"data":{"status":3,"versionCode":"11","versionName":"1.0.11"}}`))
+	}))
+	defer srv.Close()
+
+	api := NewAPI("ak", "as", srv.Client(), srv.URL+"/router/rest")
+	info, err := getAppInfoWithRetry(context.Background(), api, "com.example.app")
+	if err != nil {
+		t.Fatalf("11010 应被重试，最终成功；实际失败: %v", err)
+	}
+	if info.VersionCode == nil || int64(*info.VersionCode) != 11 {
+		t.Errorf("重试后应拿到真实数据，实际 %+v", info)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls < 2 {
+		t.Errorf("应至少调用 2 次（首次限流 + 重试），实际 %d 次", calls)
+	}
+}
+
+// TestAppInfoDoesNotRetryOtherErrors 确保只重试 11010。
+// 其他业务错误立即失败，不浪费时间也不掩盖问题。
+func TestAppInfoDoesNotRetryOtherErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"subCode":10004,"msg":"没有接口访问权限"}`))
+	}))
+	defer srv.Close()
+
+	api := NewAPI("ak", "as", srv.Client(), srv.URL+"/router/rest")
+	_, err := getAppInfoWithRetry(context.Background(), api, "com.example.app")
+	if err == nil {
+		t.Fatal("非 11010 的错误应直接失败")
+	}
+	if !strings.Contains(err.Error(), "没有接口访问权限") {
+		t.Errorf("错误应保留渠道原因：%v", err)
+	}
+}
