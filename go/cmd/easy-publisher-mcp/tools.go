@@ -189,6 +189,12 @@ type marketStateInput struct {
 	TimeoutSec    int64    `json:"timeoutSeconds,omitempty" jsonschema:"单次请求超时秒数，默认 120"`
 }
 
+type reviewNoteJSON struct {
+	Kind    string `json:"kind"`
+	Passed  *bool  `json:"passed,omitempty"`
+	Opinion string `json:"opinion,omitempty"`
+}
+
 type marketStateItem struct {
 	ID               string `json:"id"`
 	OK               bool   `json:"ok"`
@@ -198,9 +204,18 @@ type marketStateItem struct {
 	LastVersionCode  *int64 `json:"lastVersionCode,omitempty"`
 	LastVersionName  string `json:"lastVersionName,omitempty"`
 	RawState         string `json:"rawState,omitempty"`
-	Kind             string `json:"kind,omitempty"`
-	Message          string `json:"message,omitempty"`
-	Retryable        *bool  `json:"retryable,omitempty"`
+	// RejectReason 是渠道给出的审核意见原文。
+	//
+	// 各渠道都没有结构化的原因码，只有自由文本 —— 因此原样转述，
+	// 由调用方（通常是模型）去读，而不是我们做分类或归纳。
+	RejectReason string `json:"rejectReason,omitempty"`
+	// RejectAttachments 是审核意见附件的 URL。审核员截的图往往比文字说明更具体
+	RejectAttachments []string `json:"rejectAttachments,omitempty"`
+	// ReviewNotes 是渠道按维度给出的补充意见（华为的版权/版号/备案）
+	ReviewNotes []reviewNoteJSON `json:"reviewNotes,omitempty"`
+	Kind        string           `json:"kind,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	Retryable   *bool            `json:"retryable,omitempty"`
 }
 
 type marketStateOutput struct {
@@ -257,6 +272,17 @@ func registerGetMarketState(server *mcp.Server, svc *publish.Service) {
 					item.LastVersionName = v.Name
 				}
 				item.RawState = res.Info.RawState
+			}
+			// 审核意见：各渠道都只有自由文本，没有结构化原因码 ——
+			// 原样带出去，让调用方自己读，我们不做分类或归纳
+			if r := res.Info.Review; r != nil {
+				item.RejectReason = r.Opinion
+				item.RejectAttachments = r.Attachments
+				for _, n := range r.Notes {
+					item.ReviewNotes = append(item.ReviewNotes, reviewNoteJSON{
+						Kind: n.Kind, Passed: n.Passed, Opinion: n.Opinion,
+					})
+				}
 			}
 			out.Channels = append(out.Channels, item)
 		}

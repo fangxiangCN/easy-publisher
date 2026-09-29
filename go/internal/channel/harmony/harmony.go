@@ -136,8 +136,10 @@ func (c *Channel) Capabilities() channel.Capabilities {
 		RequiresExplicitConfirmation:  true,
 		AutomaticRetryAfterSubmission: false,
 		Evidence:                      channel.EvidenceVerifiedInProduction,
+		// 状态查询是本次新增的，还没用真实凭据跑过 —— 一并如实标注。
+		// 这与「送审未验证」是两件事：前者是只读查询，后者是不可撤销的写操作
 		VerifiedScope: "鉴权、App Pack 分片上传、v3 关联草稿已用真实凭据跑通；" +
-			"送审（v3 app-submit）未验证",
+			"状态查询（v3 app-info）与送审（v3 app-submit）未验证",
 		Note: "走 AGC 的 v3 接口（Android 版是 v2，两者不可混用）。" +
 			"appId 必须显式配置：鸿蒙应用在 AGC 里是独立记录，用包名反查会拿到 " +
 			"Android 应用的 id。商店里的「新版本介绍」需人工维护 —— v3 语言信息接口" +
@@ -171,12 +173,11 @@ func (c *Channel) Upload(ctx context.Context, req channel.UploadRequest) (channe
 		return 0, err
 	}
 
-	// 鸿蒙拿不到市场状态，版本号比对做不了。明确记一条日志，
-	// 不要让人以为已经校验过了
-	logx.Info("鸿蒙渠道不支持查询市场状态，本次跳过线上版本号比对",
-		"version", req.ArtifactInfo.VersionName,
-		"versionCode", req.ArtifactInfo.VersionCode)
+	// 版本号比对不在这里做 —— 它由编排层调 QueryMarket 后交给 PublishPolicy 判断，
+	// 与其他渠道一致。这里只记版本信息便于排查
 	logx.Info("开始上传 App Pack", "appId", appID,
+		"version", req.ArtifactInfo.VersionName,
+		"versionCode", req.ArtifactInfo.VersionCode,
 		"account", logx.Redact(clientID))
 
 	api := NewAPI(c.client(req.Timeouts), c.baseURL)
@@ -365,9 +366,48 @@ func (c *Channel) submitForReview(
 	}
 }
 
-// QueryMarket 说明为什么不支持。
+// QueryMarket 查询鸿蒙应用的状态与审核意见。
+//
+// 走 v3/app-info。早期版本这里直接报「不支持」，理由是「复用 Android 版 app-info
+// 会查到同名 Android 应用」—— 那个顾虑是对的，但结论下错了：v3 就是鸿蒙专用接口，
+// 用 app_id 查到的正是这个鸿蒙应用。
 func (c *Channel) QueryMarket(ctx context.Context, q channel.MarketQuery) (channel.MarketInfo, error) {
-	return channel.MarketInfo{}, unsupportedMarketQuery()
+	clientID, err := q.Credentials.Get(ParamClientID)
+	if err != nil {
+		return channel.MarketInfo{}, err
+	}
+	clientSecret, err := q.Credentials.Get(ParamClientSecret)
+	if err != nil {
+		return channel.MarketInfo{}, err
+	}
+	appID, err := q.Credentials.Get(ParamAppID)
+	if err != nil {
+		return channel.MarketInfo{}, err
+	}
+
+	api := NewAPI(c.client(q.Timeouts), c.baseURL)
+	token, err := api.GetToken(ctx, clientID, clientSecret)
+	if err != nil {
+		return channel.MarketInfo{}, err
+	}
+	auth := authHeader{token: "Bearer " + token, clientID: clientID}
+
+	appInfo, audit, err := api.GetAppInfoV3(ctx, auth, appID)
+	if err != nil {
+		return channel.MarketInfo{}, err
+	}
+	market := appInfo.ToMarketInfo(audit)
+	logx.Info("应用市场状态",
+		"state", market.ReviewState.Label(),
+		"lastVersion", versionOrNone(market.LastVersion))
+	return market, nil
+}
+
+func versionOrNone(v *channel.Version) string {
+	if v == nil {
+		return "无"
+	}
+	return v.String()
 }
 
 // ---- 辅助 ----

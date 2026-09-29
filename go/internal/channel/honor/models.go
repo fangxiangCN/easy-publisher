@@ -220,6 +220,14 @@ type ReviewState struct {
 	AuditResult *int             `json:"auditResult"`
 	VersionCode *jsonx.FlexInt64 `json:"versionCode"`
 	VersionName string           `json:"versionName"`
+	// AuditMessage 是审核意见。官方文档标为「否」（非必填），
+	// 但响应示例里给出了实例值，如 "审核通过：XXX"。
+	//
+	// 注意它不一定只在被拒时出现 —— 示例里审核通过（auditResult=1）也带了内容。
+	AuditMessage *jsonx.FlexString `json:"auditMessage"`
+	// AuditAttachment 是审核意见附件的 URL，审核员截的图常在这里。
+	// 官方文档：「审核意见附件，为url，可查看或下载」
+	AuditAttachment []string `json:"auditAttachment"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -251,7 +259,22 @@ func (r ReviewState) ToMarketInfo() channel.MarketInfo {
 	if r.VersionCode != nil {
 		version = &channel.Version{Code: int64(*r.VersionCode), Name: r.VersionName}
 	}
-	return channel.NewMarketInfo(ID, state, version, raw)
+
+	info := channel.NewMarketInfo(ID, state, version, raw)
+	feedback := &channel.ReviewFeedback{}
+	if r.AuditMessage != nil {
+		feedback.Opinion = strings.TrimSpace(string(*r.AuditMessage))
+	}
+	for _, url := range r.AuditAttachment {
+		if trimmed := strings.TrimSpace(url); trimmed != "" {
+			feedback.Attachments = append(feedback.Attachments, trimmed)
+		}
+	}
+	// 渠道返回了结构但内容为空时不留空壳，让调用方用 info.Review != nil 判断即可
+	if !feedback.Empty() {
+		info.Review = feedback
+	}
+	return info
 }
 
 // fileSHA256 计算文件的 SHA-256。

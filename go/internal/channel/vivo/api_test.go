@@ -652,3 +652,91 @@ func TestAppInfoDoesNotRetryOtherErrors(t *testing.T) {
 		t.Errorf("错误应保留渠道原因：%v", err)
 	}
 }
+
+// ---- 审核意见 ----
+
+// TestQueryMarketCarriesUnPassReason 验证 vivo 的审核不通过原因被带出来。
+//
+// 字段名来自官方《查询详细信息》文档：data.unPassReason「审核不通过原因」。
+func TestQueryMarketCarriesUnPassReason(t *testing.T) {
+	srv, _ := newFakeVivo(t, map[string]string{
+		methodGetAppInfo: `{"code":0,"msg":"ok","data":{
+			"status":4,"versionCode":"1000","versionName":"1.0.0",
+			"unPassReason":"应用名称与软著不一致，请修改后重新提交"}}`,
+	})
+
+	info, err := NewWithBaseURL(srv.URL).QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccessKey: "k", ParamAccessSecret: "s",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewRejected {
+		t.Errorf("status=4 应映射为审核被拒，实际 %v", info.ReviewState)
+	}
+	if info.Review == nil {
+		t.Fatal("应带上审核不通过原因")
+	}
+	if !strings.Contains(info.Review.Opinion, "软著不一致") {
+		t.Errorf("原因内容不对：%q", info.Review.Opinion)
+	}
+}
+
+// TestQueryMarketWithoutUnPassReason 覆盖字段缺失。
+//
+// vivo 官方把 unPassReason 标为「非必填」，且成功响应示例里根本没出现它 ——
+// 因此不能假设被拒时就一定有原因。缺了就缺了，不伪造内容。
+func TestQueryMarketWithoutUnPassReason(t *testing.T) {
+	srv, _ := newFakeVivo(t, map[string]string{
+		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":4,"versionCode":"1000","versionName":"1.0.0"}}`,
+	})
+
+	info, err := NewWithBaseURL(srv.URL).QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccessKey: "k", ParamAccessSecret: "s",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewRejected {
+		t.Errorf("status=4 应映射为审核被拒，实际 %v", info.ReviewState)
+	}
+	if info.Review != nil {
+		t.Errorf("渠道未返回原因时不应留下空壳：%+v", info.Review)
+	}
+}
+
+// TestQueryMarketIgnoresStageAuditOpinion 记录一个容易踩错的字段。
+//
+// vivo 的 app.query.stage.details（分阶段发布）里也有个 auditOpinion，
+// 名字看着像审核意见，官方定义实为「催撤审 1-催审 2-撤审 默认为空」——
+// 与驳回原因无关。我们只读 app.query.details 的 unPassReason，不碰那个字段。
+func TestQueryMarketIgnoresStageAuditOpinion(t *testing.T) {
+	srv, recorded := newFakeVivo(t, map[string]string{
+		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":4,"versionCode":"1000"}}`,
+	})
+
+	if _, err := NewWithBaseURL(srv.URL).QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccessKey: "k", ParamAccessSecret: "s",
+		}),
+		Timeouts: httpx.Default(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 状态查询只该调 app.query.details，不该碰分阶段发布那个接口
+	for _, r := range *recorded {
+		if m := r.Query.Get("method"); strings.Contains(m, "stage") {
+			t.Errorf("不应调用分阶段发布接口（其 auditOpinion 不是驳回原因）：%s", m)
+		}
+	}
+}

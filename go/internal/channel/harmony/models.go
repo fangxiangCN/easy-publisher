@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
+	"strconv"
 )
 
 // ID 是渠道标识。
@@ -53,6 +56,7 @@ const (
 	pathMultipartInit    = "api/publish/v2/upload/multipart/init"
 	pathMultipartParts   = "api/publish/v2/upload/multipart/parts"
 	pathMultipartCompose = "api/publish/v2/upload/multipart/compose"
+	pathAppInfoV3        = "api/publish/v3/app-info"
 	pathAppPackageInfo   = "api/publish/v3/app-package-info"
 	pathAppSubmit        = "api/publish/v3/app-submit"
 )
@@ -322,19 +326,87 @@ func buildRemark(updateDesc string) (*string, string) {
 	return &trimmed, ""
 }
 
-// unsupportedMarketQuery 说明鸿蒙渠道为什么不支持查询市场状态。
+// AppInfoV3 是 v3 app-info 的应用基本信息。
 //
-// 鸿蒙渠道不支持查询市场状态：其送审与状态接口未经验证，而复用华为的 app-info
-// 查到的是同名 Android 应用的记录 —— HarmonyOS NEXT 应用在 AGC 里是**独立的应用记录**。
-// 把 Android 应用的状态当成鸿蒙应用的状态报出去会误导发布决策。
-func unsupportedMarketQuery() error {
-	return &eperr.Error{
-		Kind:    eperr.KindProtocolMismatch,
-		Channel: ID,
-		Msg: "鸿蒙渠道暂不支持查询市场状态：其送审与状态接口未经验证，" +
-			"而复用华为 app-info 查到的是同名 Android 应用的记录。" +
-			"请直接到 AGC 后台查看鸿蒙应用的状态",
+// 字段取值与 v2 的 AppInfo 同源，releaseState 那套枚举通用。
+type AppInfoV3 struct {
+	// ReleaseState 取值同 Android 版：0 已上架 / 1 上架审核不通过 / 2 已下架
+	// 3 待上架 / 4 审核中 / 5 升级审核中 / 6 申请下架 / 7 草稿 / 8 升级审核不通过
+	// 9 下架审核不通过 / 10 应用被开发者下架 / 11 撤销上架 / 12 预审中 / 13 预审不通过
+	ReleaseState  *jsonx.FlexInt64 `json:"releaseState"`
+	VersionCode   *jsonx.FlexInt64 `json:"versionCode"`
+	VersionNumber string           `json:"versionNumber"`
+	// OnShelfVersionCode 是在架版本的版本号，与「最新版本」可能不同：
+	// 有草稿或审核中的新版本时，versionCode 是新版本而 onShelf 才是在架的那个
+	OnShelfVersionCode   *jsonx.FlexInt64 `json:"onShelfVersionCode"`
+	OnShelfVersionNumber string           `json:"onShelfVersionNumber"`
+	// ReleaseTime 是版本发布时间
+	ReleaseTime string `json:"releaseTime"`
+}
+
+// AuditInfoV3 是 v3 的审核意见。
+//
+// v3 的独立数据模型页只列出 auditOpinion 一个字段（Android 版 v2 内联了 7 个：
+// 整体 + 版权 + 版号 + 备案各一对）。v3 是否也返回那 6 个字段，文档无法判定 ——
+// 因此这里只声明文档明确的这一个，不猜。
+type AuditInfoV3 struct {
+	// AuditOpinion 是应用整体审核意见
+	AuditOpinion *jsonx.FlexString `json:"auditOpinion"`
+}
+
+// AppInfoRespV3 是 v3 app-info 的响应。
+//
+// auditInfo 与 appInfo 平级，这是官方文档的层级。
+type AppInfoRespV3 struct {
+	Ret       *ret         `json:"ret"`
+	AppInfo   *AppInfoV3   `json:"appInfo"`
+	AuditInfo *AuditInfoV3 `json:"auditInfo"`
+}
+
+// ToMarketInfo 映射为渠道无关的状态。
+//
+// 只有 Android 版的四类「审核不通过」（1 上架、8 升级、13 预审）才归为 Rejected。
+// 9「下架审核不通过」不在此列 —— 它指的是下架申请被拒，与「新版本被拒」是两件事，
+// 归为 Unknown 而不是让人误以为版本被拒。
+func (a AppInfoV3) ToMarketInfo(audit *AuditInfoV3) channel.MarketInfo {
+	state := channel.ReviewUnknown
+	raw := ""
+	if a.ReleaseState != nil {
+		raw = strconv.FormatInt(int64(*a.ReleaseState), 10)
+		switch int64(*a.ReleaseState) {
+		case 0:
+			state = channel.ReviewOnline
+		case 1, 8, 13:
+			state = channel.ReviewRejected
+		case 4, 5:
+			state = channel.ReviewUnderReview
+		case 7:
+			state = channel.ReviewDraft
+		case 2, 6, 10:
+			state = channel.ReviewOffline
+		}
 	}
+
+	// 优先用「在架版本」：有草稿或审核中的新版本时，versionCode 是新版本，
+	// 而上层做版本号比对需要的是线上那个版本
+	code := a.OnShelfVersionCode
+	name := a.OnShelfVersionNumber
+	if code == nil {
+		code = a.VersionCode
+		name = a.VersionNumber
+	}
+	var version *channel.Version
+	if code != nil {
+		version = &channel.Version{Code: int64(*code), Name: name}
+	}
+
+	info := channel.NewMarketInfo(ID, state, version, raw)
+	if audit != nil && audit.AuditOpinion != nil {
+		if opinion := strings.TrimSpace(string(*audit.AuditOpinion)); opinion != "" {
+			info.Review = &channel.ReviewFeedback{Opinion: opinion}
+		}
+	}
+	return info
 }
 
 func truncate(s string) string {

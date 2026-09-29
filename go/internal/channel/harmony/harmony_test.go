@@ -756,14 +756,108 @@ func TestPartURLMustBeHTTPS(t *testing.T) {
 	}
 }
 
-func TestQueryMarketExplainsWhyUnsupported(t *testing.T) {
-	// 复用华为 app-info 查到的是同名 Android 应用的记录，会误导发布决策
-	_, err := New().QueryMarket(context.Background(), channel.MarketQuery{})
-	if err == nil {
-		t.Fatal("鸿蒙不支持查询市场状态")
+// TestQueryMarketUsesV3 验证鸿蒙走 v3/app-info 查询状态，并带上审核意见。
+//
+// 早期版本这里直接报「不支持」，理由是「复用 Android 版 app-info 会查到同名
+// Android 应用」—— 那个顾虑本身是对的（HarmonyOS NEXT 应用在 AGC 里是独立记录），
+// 但结论下错了：v3 就是鸿蒙专用接口，用 app_id 查到的正是这个鸿蒙应用。
+func TestQueryMarketUsesV3(t *testing.T) {
+	ch, fake := newFakeHarmony(t)
+	fake.set("/api/publish/v3/app-info", `{
+		"ret": {"code": 0, "msg": "success"},
+		"appInfo": {
+			"releaseState": 4,
+			"versionCode": 1000012,
+			"versionNumber": "1.0.12",
+			"onShelfVersionCode": 1000010,
+			"onShelfVersionNumber": "1.0.10",
+			"releaseTime": "2026-09-28 10:00:00"
+		},
+		"auditInfo": {"auditOpinion": "正在审核中，请耐心等待"}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.harmony",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamClientID: "cid", ParamClientSecret: "sec", ParamAppID: "harmony-app-1",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatalf("v3 查询应当可用：%v", err)
 	}
-	if !strings.Contains(err.Error(), "Android") {
-		t.Errorf("应说明为什么不能复用华为接口：%v", err)
+
+	// releaseState=4 是审核中
+	if info.ReviewState != channel.ReviewUnderReview {
+		t.Errorf("ReviewState = %v, 期望审核中", info.ReviewState)
+	}
+	// 有在架版本时要优先用它：上层做版本号比对需要的是线上那个版本，
+	// 而 versionCode 是正在审核的新版本
+	if info.LastVersion == nil {
+		t.Fatal("应解析出版本信息")
+	}
+	if info.LastVersion.Code != 1000010 {
+		t.Errorf("LastVersion.Code = %d, 期望 1000010（在架版本，不是审核中的 1000012）",
+			info.LastVersion.Code)
+	}
+	if info.Review == nil || !strings.Contains(info.Review.Opinion, "正在审核中") {
+		t.Errorf("应带上审核意见，实际 %+v", info.Review)
+	}
+
+	// 确认走的是 v3 路径
+	found := false
+	for _, p := range fake.paths() {
+		if strings.HasSuffix(p, "/v3/app-info") {
+			found = true
+		}
+		if strings.Contains(p, "/v2/app-info") {
+			t.Error("不应调用 Android 版的 v2/app-info —— 那查到的是同名 Android 应用")
+		}
+	}
+	if !found {
+		t.Errorf("未调用 v3/app-info，实际请求：%v", fake.paths())
+	}
+}
+
+// 审核意见为空串时不留下空壳，让调用方用 info.Review != nil 判断即可。
+func TestQueryMarketEmptyOpinionLeavesNoShell(t *testing.T) {
+	ch, fake := newFakeHarmony(t)
+	// 官方响应示例里未拒审时就是 "auditOpinion": ""
+	fake.set("/api/publish/v3/app-info", `{
+		"ret": {"code": 0},
+		"appInfo": {"releaseState": 0, "versionCode": 1000000, "versionNumber": "1.0.0"},
+		"auditInfo": {"auditOpinion": ""}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.harmony",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamClientID: "cid", ParamClientSecret: "sec", ParamAppID: "app-1",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewOnline {
+		t.Errorf("ReviewState = %v", info.ReviewState)
+	}
+	if info.Review != nil {
+		t.Errorf("意见为空时不应留下空壳结构：%+v", info.Review)
+	}
+}
+
+// 缺 app_id 时给出凭据错误，而不是笼统的「不支持」。
+func TestQueryMarketRequiresAppID(t *testing.T) {
+	_, err := New().QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.harmony",
+		Credentials:   channel.NewCredentials(map[string]string{}),
+	})
+	if err == nil {
+		t.Fatal("缺凭据应当报错")
+	}
+	if !strings.Contains(err.Error(), ParamClientID) {
+		t.Errorf("应指出缺哪个参数：%v", err)
 	}
 }
 

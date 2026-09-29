@@ -147,6 +147,19 @@ POST api/publish/v3/app-submit?appId=             body: {remark?, releaseTime?,
                                                        registeredIdType?, registeredIdNumber?}
 ```
 
+状态查询：`GET api/publish/v3/app-info?appId=`（v3，鸿蒙专用）。
+
+响应里 `auditInfo` 与 `appInfo` **平级**，不在 appInfo 内部：
+
+| 字段 | 说明 |
+|---|---|
+| `appInfo.releaseState` | 与 Android 版同一套枚举 |
+| `appInfo.onShelfVersionCode` / `onShelfVersionNumber` | **在架版本**。有草稿或审核中的新版本时，`versionCode` 是新版本，做版本号比对要用这个 |
+| `auditInfo.auditOpinion` | 审核意见。未拒审时是空串 |
+
+不要复用 Android 版的 `v2/app-info`：HarmonyOS NEXT 应用在 AGC 里是**独立的应用记录**，
+用包名或 Android 的 appId 查到的是另一个应用。
+
 成功判据：`ret.code == 0`。
 
 陷阱（这个渠道最多，因为 API 最新、文档最少）：
@@ -313,13 +326,40 @@ GET ?method=app.sync.update.app    送审
 
 ---
 
+## 审核意见（排查拒审用）
+
+各渠道把「为什么被拒」放在**已经调用的查询接口**里，只是字段位置不直观。
+下表是逐字核对官方文档后的结果。
+
+| 渠道 | 字段 | 位置 | 备注 |
+|---|---|---|---|
+| 华为 | `auditOpinion` | `v2/app-info` 的 `auditInfo` | 与 `appInfo` **平级**，不在它内部。未拒审时是空串 |
+| 华为 | `copyRightAuditResult` / `copyRightAuditOpinion` 等 | 同上 | 版权、版号、备案各一对，**仅中国大陆应用返回** |
+| 荣耀 | `auditMessage` + `auditAttachment` | `get-app-current-release` 的 `data` | 附件是审核员截图，常比文字更具体 |
+| 鸿蒙 | `auditOpinion` | `v3/app-info` 的 `auditInfo` | 与 `appInfo` 平级 |
+| vivo | `unPassReason` | `app.query.details` 的 `data` | 文档标为「非必填」，可能缺失 |
+| OPPO | `refuse_reason` / `refuse_advice` / `refuse_file` | `resource/v1/app/info` | ⚠️ **仅第三方文档镜像，未证实** |
+| 小米 | — | — | API 完全不提供状态查询 |
+
+三条需要注意的：
+
+- **没有一家提供结构化的原因码**（如 `rejectCode`），全部是自由文本（华为限 1024 字符）
+  加附件链接。因此无法自动分类拒审原因，只能把原文交给人或 agent 读。
+- **有意见不等于被拒。** 荣耀的官方示例里审核*通过*时 `auditMessage` 也有内容
+  （`"审核通过：XXX"`）—— 状态与意见是两个独立字段。
+- **vivo 有个陷阱字段。** `app.query.stage.details` 里也有 `auditOpinion`，
+  名字像审核意见，官方定义实为「催撤审 1-催审 2-撤审」。别用错。
+
+网页后台有而 API 没有的：华为的「审核报告」含结构化详情与日志下载，vivo 有测试录屏与
+机型 log，OPPO 有打回附件。这些只在后台可见。
+
 ## 能力矩阵汇总
 
 | 渠道 | 可停阶段 | 风险 | 撤回 | 证据 |
 |---|---|---|---|---|
 | 华为 | 上传 / 草稿 / 送审 | 高 | API 支持¹ | 已实测（不含送审） |
 | 荣耀 | 上传 / 草稿 / 送审 | 高 | 未验证 | 已实测（不含送审） |
-| 鸿蒙 | 上传 / 草稿 / 送审 | 高 | API 支持¹ | 已实测（不含送审） |
+| 鸿蒙 | 上传 / 草稿 / 送审 | 高 | API 支持¹ | 已实测（鉴权+上传+草稿；状态查询与送审未验证） |
 | OPPO | 上传 / 送审 | 极高 | 未验证 | 已实测（不含送审） |
 | vivo | 上传 / 送审 | 极高 | 未验证 | 已实测（不含送审） |
 | 小米 | 送审 | 极高 | 未验证 | 代码推断 |

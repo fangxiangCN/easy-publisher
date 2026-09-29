@@ -844,3 +844,108 @@ func TestEnsureRating(t *testing.T) {
 func testAPI(ch *Channel) *API {
 	return NewAPI(ch.client(httpx.Default()), ch.baseURL, ch.tokenURL)
 }
+
+// ---- 审核意见 ----
+
+// TestQueryMarketCarriesAuditMessage 验证荣耀的审核意见与附件被带出来。
+//
+// 字段名与取值来自官方《API传包服务指引》的 PubAuditResult：
+//
+//	auditMessage    否  String        审核意见
+//	auditAttachment 否  List<String>  审核意见附件，为url，可查看或下载
+//
+// 附件特别值得留意：审核员截的图往往比文字说明更具体。
+func TestQueryMarketCarriesAuditMessage(t *testing.T) {
+	ch, fake := newFakeHonor(t)
+	fake.set("/openapi/v1/publish/get-app-current-release", `{
+		"code": 0, "msg": "ok",
+		"data": {
+			"releaseId": "123456789",
+			"auditResult": 2,
+			"auditMessage": "应用内存在未声明的权限申请，请补充隐私政策说明",
+			"auditAttachment": ["https://xxx.com/image/a.webp", "https://xxx.com/image/b.webp"],
+			"versionName": "1.0.5",
+			"versionCode": "105"
+		}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewRejected {
+		t.Errorf("auditResult=2 应映射为审核被拒，实际 %v", info.ReviewState)
+	}
+	if info.Review == nil {
+		t.Fatal("应带上审核意见")
+	}
+	if !strings.Contains(info.Review.Opinion, "未声明的权限") {
+		t.Errorf("审核意见内容不对：%q", info.Review.Opinion)
+	}
+	if len(info.Review.Attachments) != 2 {
+		t.Errorf("附件应有 2 个，实际 %d 个：%v",
+			len(info.Review.Attachments), info.Review.Attachments)
+	}
+	// 附件是 URL，不该被改写
+	if info.Review.Attachments[0] != "https://xxx.com/image/a.webp" {
+		t.Errorf("附件 URL 被改动了：%q", info.Review.Attachments[0])
+	}
+}
+
+// TestQueryMarketAuditMessageEmptyLeavesNoShell 覆盖「字段在但没内容」。
+//
+// auditMessage 在文档里标为「否」（非必填），未拒审时通常没有值。
+func TestQueryMarketAuditMessageEmptyLeavesNoShell(t *testing.T) {
+	ch, fake := newFakeHonor(t)
+	fake.set("/openapi/v1/publish/get-app-current-release", `{
+		"code": 0, "msg": "ok",
+		"data": {"auditResult": 1, "auditMessage": "", "versionCode": 1000, "versionName": "1.0.0"}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Review != nil {
+		t.Errorf("意见为空时不应留下空壳：%+v", info.Review)
+	}
+}
+
+// TestQueryMarketAuditMessageOnApproval 记录一个反直觉的实际情况。
+//
+// 荣耀的官方调用示例里，审核**通过**（auditResult=1）时 auditMessage 也有内容：
+//
+//	"auditMessage": "审核通过：XXX"
+//
+// 所以不能假设「有意见 = 被拒」，两个字段要分开看。
+func TestQueryMarketAuditMessageOnApproval(t *testing.T) {
+	ch, fake := newFakeHonor(t)
+	fake.set("/openapi/v1/publish/get-app-current-release", `{
+		"code": 0, "msg": "ok",
+		"data": {"auditResult": 1, "auditMessage": "审核通过：XXX", "versionCode": 1000, "versionName": "1.0.0"}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewOnline {
+		t.Errorf("auditResult=1 应映射为已上架，实际 %v", info.ReviewState)
+	}
+	// 有意见不等于被拒 —— 状态与意见是独立的两个字段
+	if info.Review == nil {
+		t.Error("审核通过时也可能带意见，不应丢弃")
+	}
+}

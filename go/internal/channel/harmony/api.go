@@ -75,6 +75,45 @@ func (a *API) GetToken(ctx context.Context, clientID, clientSecret string) (stri
 	return token, nil
 }
 
+// GetAppInfoV3 查询鸿蒙应用的状态与审核意见。
+//
+// # 为什么用 v3 而不是复用 Android 版的 v2
+//
+// HarmonyOS NEXT 应用在 AGC 里是**独立的应用记录**，与同名 Android 应用不是同一个
+// appId。用 Android 版的 app-info 查到的是另一个应用的记录 —— 本渠道曾因此直接声明
+// 「不支持查询市场状态」，但那个结论下错了：v3 就是鸿蒙专用接口。
+//
+// v3/app-info 是鸿蒙专用的版本，用我们本来就要用户配置的 app_id 查询，
+// 返回的 releaseState 与 auditInfo 都是这个鸿蒙应用的。
+func (a *API) GetAppInfoV3(
+	ctx context.Context,
+	auth authHeader,
+	appID string,
+) (AppInfoV3, *AuditInfoV3, error) {
+	req, err := a.newRequest(ctx, http.MethodGet,
+		a.url(pathAppInfoV3, map[string]string{"appId": appID}), auth, nil)
+	if err != nil {
+		return AppInfoV3{}, nil, err
+	}
+	body, err := httpx.Do(a.client, req, ID)
+	if err != nil {
+		return AppInfoV3{}, nil, err
+	}
+	resp, err := unmarshal[AppInfoRespV3](body, "查询应用信息")
+	if err != nil {
+		return AppInfoV3{}, nil, err
+	}
+	if err := resp.Ret.checkSuccess("查询应用信息"); err != nil {
+		return AppInfoV3{}, nil, err
+	}
+	if resp.AppInfo == nil {
+		return AppInfoV3{}, nil, protocolError(
+			"华为未返回 appInfo，无法判断应用状态。请确认 app_id 是鸿蒙应用的 ID"+
+				"（与同名 Android 应用不是同一个）", body, nil)
+	}
+	return *resp.AppInfo, resp.AuditInfo, nil
+}
+
 // InitMultipart 初始化分片上传，返回 objectId、nspUploadId 与分片大小。
 func (a *API) InitMultipart(
 	ctx context.Context,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ID 是渠道标识。
@@ -135,6 +136,88 @@ type AppInfo struct {
 	VersionNumber string `json:"versionNumber"`
 	// 原实现还声明了 onShelfVersionNumber（在架版本号），但全项目无人读取，
 	// 却因为非空声明成为一个额外的解析失败点，直接删掉。
+
+	// audit 承载响应里与 appInfo 平级的 auditInfo。
+	//
+	// 非导出且不参与反序列化：它不在这层 JSON 里，由 GetAppInfo 在解析完整响应后填入。
+	// 这样放是为了让 ToMarketInfo 能一次性给出完整状态，调用方不必再解析一次响应体。
+	audit *AuditInfo
+}
+
+// AuditInfo 是华为的审核意见信息。
+//
+// 官方文档（v2 查询应用信息）把 AuditInfo 列为响应里与 appInfo 平级的一级字段：
+//
+//	auditInfo | O | AuditInfo | 审核意见信息
+//
+// 官方响应示例里未拒审时是 `"auditInfo": { "auditOpinion": "" }` ——
+// 字段始终返回，没有内容时是空串而不是缺失。
+//
+// # 为什么用 FlexString / FlexInt64 而不是原生类型
+//
+// 文档写 auditOpinion 是 String(1024)、copyRightAuditResult 是 Integer(4)，
+// 但这家渠道的类型并不可靠 —— 同一个接口的 versionCode 在不同应用上
+// 都可能以字符串返回。已由 jsonx 包统一兜住，这里沿用同一策略。
+type AuditInfo struct {
+	// AuditOpinion 是应用整体审核意见。必选字段，未拒审时为空串
+	AuditOpinion *jsonx.FlexString `json:"auditOpinion"`
+
+	// 以下三项只有在中国大陆地区发布的应用才会返回。
+	// Result 取值：0 通过 / 1 不通过（注意不是布尔）
+	CopyRightAuditResult      *jsonx.FlexInt64  `json:"copyRightAuditResult"`
+	CopyRightAuditOpinion     *jsonx.FlexString `json:"copyRightAuditOpinion"`
+	CopyRightCodeAuditResult  *jsonx.FlexInt64  `json:"copyRightCodeAuditResult"`
+	CopyRightCodeAuditOpinion *jsonx.FlexString `json:"copyRightCodeAuditOpinion"`
+	RecordAuditResult         *jsonx.FlexInt64  `json:"recordAuditResult"`
+	RecordAuditOpinion        *jsonx.FlexString `json:"recordAuditOpinion"`
+}
+
+// toReviewFeedback 把华为的多条审核意见整理成统一的反馈结构。
+//
+// 华为与其它渠道的差别：它按维度分别给出结果（整体 / 版权 / 版号 / 备案），
+// 后三项是工信部合规要求，被拒时往往只有其中某一项不通过。
+// 因此这里既填 Opinion（整体意见），也填 Notes（各维度明细）。
+func (a *AuditInfo) toReviewFeedback() *channel.ReviewFeedback {
+	if a == nil {
+		return nil
+	}
+	feedback := &channel.ReviewFeedback{}
+	if a.AuditOpinion != nil {
+		feedback.Opinion = strings.TrimSpace(string(*a.AuditOpinion))
+	}
+	for _, item := range []struct {
+		kind    string
+		result  *jsonx.FlexInt64
+		opinion *jsonx.FlexString
+	}{
+		{"版权", a.CopyRightAuditResult, a.CopyRightAuditOpinion},
+		{"版号", a.CopyRightCodeAuditResult, a.CopyRightCodeAuditOpinion},
+		{"备案", a.RecordAuditResult, a.RecordAuditOpinion},
+	} {
+		note := channel.ReviewNote{Kind: item.kind}
+		if item.result != nil {
+			// 0 通过 / 1 不通过。其它取值不做猜测
+			switch int64(*item.result) {
+			case 0:
+				passed := true
+				note.Passed = &passed
+			case 1:
+				passed := false
+				note.Passed = &passed
+			}
+		}
+		if item.opinion != nil {
+			note.Opinion = strings.TrimSpace(string(*item.opinion))
+		}
+		// 既没有结果也没有意见的维度不列出，避免刷出一堆空条目
+		if note.Passed != nil || note.Opinion != "" {
+			feedback.Notes = append(feedback.Notes, note)
+		}
+	}
+	if feedback.Empty() {
+		return nil
+	}
+	return feedback
 }
 
 // ToMarketInfo 映射到渠道无关的状态。
@@ -143,6 +226,8 @@ type AppInfo struct {
 //   - 补齐草稿态（7）与下架态（2/6/10）。原实现只认 0/4/5/8，
 //     草稿应用一律显示「状态未知」，用户无从判断能不能提交。
 //   - 版本信息缺失时 LastVersion 传 nil 而不是伪造一个版本号，也不抛异常。
+//
+// ToMarketInfo 映射到渠道无关的状态，含审核意见。
 func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
 	raw := ""
@@ -166,7 +251,9 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	if a.VersionCode != nil && strings.TrimSpace(a.VersionNumber) != "" {
 		version = &channel.Version{Code: *a.VersionCode, Name: a.VersionNumber}
 	}
-	return channel.NewMarketInfo(ID, state, version, raw)
+	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.Review = a.audit.toReviewFeedback()
+	return info
 }
 
 // UploadURL 是上传地址与需要原样透传的请求头。

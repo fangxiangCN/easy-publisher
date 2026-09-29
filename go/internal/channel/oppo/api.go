@@ -104,8 +104,22 @@ type AppInfo struct {
 
 // ToMarketInfo 转成渠道无关的状态。
 //
-// audit_status 缺失时映射为「未知」而不是「审核中」—— 接口没返回状态和商店确实在
-// 审核是两件事，混在一起会让排查走错方向。上游在这里会 NPE。
+// # 为什么未知状态码归为 Unknown 而不是「审核中」
+//
+// 原先的实现把 default 分支当成 UnderReview。这看起来保守，实际是错的：
+// `canSubmit` 由「是否审核中」推导，而 `PublishPolicy` 会因此**拒绝提交**。
+// 于是当 OPPO 返回一个我们不认识的状态码时，用户看到的是
+// 「渠道正在审核中，不能提交新版本」—— 但真实情况可能是被拒了、应该重新提交。
+//
+// OPPO 的审核状态取值远不止已上架（111）与被拒（444）两种。第三方文档镜像里
+// 提到还有测试不通过、运营打回、资质审核不通过等取值，但那是 2022 年的第三方
+// 来源，已无法从官方文档核实（OPPO 开放平台文档需登录）。
+//
+// 因此这里**不猜**：不认识的码就是 Unknown，并保留 RawState 让用户能拿着原始值
+// 去后台核对。Unknown 不阻断提交，让渠道自己拒绝比我们替它下结论准确。
+//
+// audit_status 缺失同样归为 Unknown —— 接口没返回状态和商店确实在审核是两件事，
+// 混在一起会让排查走错方向。上游在这里会 NPE。
 func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
 	raw := ""
@@ -117,7 +131,7 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 		case auditRejected:
 			state = channel.ReviewRejected
 		default:
-			state = channel.ReviewUnderReview
+			state = channel.ReviewUnknown
 		}
 	}
 	var version *channel.Version

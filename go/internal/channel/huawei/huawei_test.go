@@ -748,3 +748,121 @@ func newSequencedHuawei(t *testing.T, next func(int) string) (*httptest.Server, 
 	fake.set(uploadPath, ``)
 	return srv, ch
 }
+
+// ---- 审核意见 ----
+
+// TestQueryMarketCarriesAuditOpinion 验证华为的审核意见被带出来。
+//
+// auditInfo 在响应里与 appInfo **平级**，不在 appInfo 内部 —— 这是官方文档的层级，
+// 容易看漏。字段名取自 v2 查询应用信息文档的 AuditInfo 数据模型。
+func TestQueryMarketCarriesAuditOpinion(t *testing.T) {
+	ch, fake := newFakeHuawei(t)
+	fake.set("/api/publish/v2/app-info", `{
+		"ret": {"code": 0, "msg": "success"},
+		"appInfo": {"releaseState": 8, "versionCode": 1020, "versionNumber": "1.2.0"},
+		"auditInfo": {"auditOpinion": "您的应用缺少隐私政策链接，请在应用信息中补充后重新提交"}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState != channel.ReviewRejected {
+		t.Errorf("releaseState=8 应为升级审核不通过，实际 %v", info.ReviewState)
+	}
+	if info.Review == nil {
+		t.Fatal("应带上审核意见")
+	}
+	if !strings.Contains(info.Review.Opinion, "隐私政策") {
+		t.Errorf("审核意见内容不对：%q", info.Review.Opinion)
+	}
+}
+
+// TestQueryMarketAuditOpinionEmptyLeavesNoShell 覆盖「字段在但内容为空」。
+//
+// 官方响应示例里未拒审时就是 "auditInfo": {"auditOpinion": ""} ——
+// 字段始终返回，不能把空串当成有意见。
+func TestQueryMarketAuditOpinionEmptyLeavesNoShell(t *testing.T) {
+	ch, fake := newFakeHuawei(t)
+	fake.set("/api/publish/v2/app-info", `{
+		"ret": {"code": 0},
+		"appInfo": {"releaseState": 0, "versionCode": 1000, "versionNumber": "1.0.0"},
+		"auditInfo": {"auditOpinion": ""}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Review != nil {
+		t.Errorf("意见为空时不应留下空壳：%+v", info.Review)
+	}
+}
+
+// TestQueryMarketCarriesMainlandComplianceNotes 覆盖版权/版号/备案三项。
+//
+// 华为与其它渠道的差别：它按维度分别给出结果，这几项是工信部合规要求，
+// 被拒时往往只有其中某一项不通过 —— 只说「整体审核不通过」帮助有限。
+// 文档明确写「只有在中国大陆地区发布的应用才会返回」，因此缺失是正常的。
+func TestQueryMarketCarriesMainlandComplianceNotes(t *testing.T) {
+	ch, fake := newFakeHuawei(t)
+	fake.set("/api/publish/v2/app-info", `{
+		"ret": {"code": 0},
+		"appInfo": {"releaseState": 1, "versionCode": 1000, "versionNumber": "1.0.0"},
+		"auditInfo": {
+			"auditOpinion": "备案信息有误",
+			"copyRightAuditResult": 0,
+			"copyRightAuditOpinion": "",
+			"recordAuditResult": 1,
+			"recordAuditOpinion": "APP备案校验未通过，请及时完成备案"
+		}
+	}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Review == nil {
+		t.Fatal("应带上审核意见")
+	}
+
+	byKind := map[string]channel.ReviewNote{}
+	for _, n := range info.Review.Notes {
+		byKind[n.Kind] = n
+	}
+	// 版权：result=0 表示通过，即使没有意见也要列出
+	copyright, ok := byKind["版权"]
+	if !ok {
+		t.Fatal("应列出「版权」维度")
+	}
+	if copyright.Passed == nil || !*copyright.Passed {
+		t.Errorf("版权 result=0 应映射为通过，实际 %v", copyright.Passed)
+	}
+	// 备案：result=1 表示不通过，且带意见
+	record, ok := byKind["备案"]
+	if !ok {
+		t.Fatal("应列出「备案」维度")
+	}
+	if record.Passed == nil || *record.Passed {
+		t.Errorf("备案 result=1 应映射为不通过，实际 %v", record.Passed)
+	}
+	if !strings.Contains(record.Opinion, "备案校验未通过") {
+		t.Errorf("备案意见内容不对：%q", record.Opinion)
+	}
+	// 版号：既无结果也无意见，不应刷出空条目
+	if _, ok := byKind["版号"]; ok {
+		t.Error("既无结果也无意见的维度不应列出")
+	}
+}

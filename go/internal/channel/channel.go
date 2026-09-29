@@ -284,6 +284,56 @@ type MarketInfo struct {
 	CanSubmit bool
 	// RawState 是渠道返回的原始状态值，便于排查新增的状态码
 	RawState string
+	// Review 是渠道给出的审核反馈，渠道未提供时为 nil
+	Review *ReviewFeedback
+}
+
+// ReviewFeedback 是渠道给出的审核反馈。
+//
+// # 为什么是自由文本而不是原因码
+//
+// 四个渠道（华为、荣耀、vivo，以及鸿蒙的 v3 接口）都提供审核意见，但**没有一家
+// 给出结构化的原因码**（如 rejectCode）—— 全部是一段自由文本外加附件链接。
+// 因此「自动分类拒审原因再自动修复」做不到，只能把原文交给人和 agent 去读。
+//
+// 附件值得留意：审核员截的图经常比文字说明更能说明问题，荣辱的文档明确写了
+// 「为url，可查看或下载」。
+//
+// 字段可能为空：vivo 的文档把 unPassReason 标为「非必填」，华为的响应示例里
+// 未拒审时 auditOpinion 是空串。调用方需要处理「有字段但没内容」。
+type ReviewFeedback struct {
+	// Opinion 是审核意见原文
+	Opinion string
+	// Attachments 是审核意见附件的 URL，可能是截图
+	Attachments []string
+	// Notes 是渠道特有的补充审核意见。
+	//
+	// 华为会按维度分别给出结果：整体、版权、版号、备案（后三项仅中国大陆应用返回）。
+	// 其他渠道通常只有一条，此时 Notes 为空，意见在 Opinion 里。
+	Notes []ReviewNote
+}
+
+// Empty 报告这条反馈是否没有任何内容。
+//
+// 渠道经常返回结构但内容为空（华为的 auditOpinion 未拒审时是空串），
+// 调用方据此决定要不要展示。
+func (r *ReviewFeedback) Empty() bool {
+	if r == nil {
+		return true
+	}
+	return strings.TrimSpace(r.Opinion) == "" &&
+		len(r.Attachments) == 0 &&
+		len(r.Notes) == 0
+}
+
+// ReviewNote 是一条补充审核意见。
+type ReviewNote struct {
+	// Kind 是意见的维度，如「版权」「版号」「备案」
+	Kind string
+	// Passed 表示该维度是否通过。nil 表示渠道未给出结果，不代表通过
+	Passed *bool
+	// Opinion 是该维度的意见内容
+	Opinion string
 }
 
 // NewMarketInfo 构造状态，CanSubmit 默认按「不在审核中」推导。

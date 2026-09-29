@@ -57,6 +57,11 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			if jsonOut {
+				type reviewNoteJSON struct {
+					Kind    string  `json:"kind"`
+					Passed  *bool   `json:"passed"`
+					Opinion *string `json:"opinion"`
+				}
 				type channelJSON struct {
 					ID               string  `json:"id"`
 					OK               bool    `json:"ok"`
@@ -66,10 +71,16 @@ func newStatusCmd() *cobra.Command {
 					LastVersionCode  *int64  `json:"lastVersionCode"`
 					LastVersionName  *string `json:"lastVersionName"`
 					RawState         *string `json:"rawState"`
-					Kind             *string `json:"kind"`
-					Code             *string `json:"code"`
-					Message          *string `json:"message"`
-					Retryable        *bool   `json:"retryable"`
+					// RejectReason 是渠道给出的审核意见原文
+					RejectReason *string `json:"rejectReason"`
+					// RejectAttachments 是审核意见附件的 URL（审核员截图等）
+					RejectAttachments []string `json:"rejectAttachments,omitempty"`
+					// ReviewNotes 是渠道按维度给出的补充意见（华为的版权/版号/备案）
+					ReviewNotes []reviewNoteJSON `json:"reviewNotes,omitempty"`
+					Kind        *string          `json:"kind"`
+					Code        *string          `json:"code"`
+					Message     *string          `json:"message"`
+					Retryable   *bool            `json:"retryable"`
 				}
 				out := struct {
 					OK            bool          `json:"ok"`
@@ -105,6 +116,21 @@ func newStatusCmd() *cobra.Command {
 							raw := res.Info.RawState
 							item.RawState = &raw
 						}
+						if r := res.Info.Review; r != nil {
+							if r.Opinion != "" {
+								opinion := r.Opinion
+								item.RejectReason = &opinion
+							}
+							item.RejectAttachments = r.Attachments
+							for _, n := range r.Notes {
+								note := reviewNoteJSON{Kind: n.Kind, Passed: n.Passed}
+								if n.Opinion != "" {
+									o := n.Opinion
+									note.Opinion = &o
+								}
+								item.ReviewNotes = append(item.ReviewNotes, note)
+							}
+						}
 					}
 					out.Channels = append(out.Channels, item)
 				}
@@ -130,6 +156,10 @@ func newStatusCmd() *cobra.Command {
 					rows = append(rows, []string{id, res.Info.ReviewState.Label(), version, canSubmit})
 				}
 				output.Table([]string{"渠道", "审核状态", "线上版本", "可提交"}, rows)
+
+				// 审核意见单独列出：它是一段自由文本（华为限 1024 字符），
+				// 塞进表格会把列宽撑爆。这是排查拒审时最有用的信息，值得占几行
+				printReviewFeedback(order, results)
 
 				for _, id := range order {
 					if err := results[id].Err; err != nil {
@@ -171,3 +201,45 @@ func (e *silentError) Error() string { return "" }
 func (e *silentError) ExitCode() int { return e.code }
 
 func asEperr(err error, target **eperr.Error) bool { return errors.As(err, target) }
+
+// printReviewFeedback 打印各渠道给出的审核意见。
+//
+// 只有部分渠道提供，且都是一段自由文本 —— 没有一家给出结构化的原因码，
+// 因此这里只做转述，不做分类或归纳：原文交给人判断，比我们猜得准。
+func printReviewFeedback(order []string, results map[string]publish.MarketResult) {
+	for _, id := range order {
+		res := results[id]
+		if res.Err != nil || res.Info.Review == nil {
+			continue
+		}
+		feedback := res.Info.Review
+		output.Line("")
+		output.Line("[%s] %s", id, res.Info.ReviewState.Label())
+		if feedback.Opinion != "" {
+			output.Line("  审核意见：%s", feedback.Opinion)
+		}
+		// 华为会按维度分别给出结果（版权/版号/备案），其它渠道通常没有
+		for _, note := range feedback.Notes {
+			verdict := ""
+			if note.Passed != nil {
+				if *note.Passed {
+					verdict = "通过"
+				} else {
+					verdict = "不通过"
+				}
+			}
+			switch {
+			case verdict != "" && note.Opinion != "":
+				output.Line("  %s：%s（%s）", note.Kind, verdict, note.Opinion)
+			case verdict != "":
+				output.Line("  %s：%s", note.Kind, verdict)
+			case note.Opinion != "":
+				output.Line("  %s：%s", note.Kind, note.Opinion)
+			}
+		}
+		// 附件往往是审核员截的图，有时比文字说明更能说明问题
+		for _, url := range feedback.Attachments {
+			output.Line("  附件：%s", url)
+		}
+	}
+}

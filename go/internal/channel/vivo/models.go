@@ -195,6 +195,13 @@ type appInfo struct {
 	ReviewStatus *int             `json:"status"`
 	VersionCode  *jsonx.FlexInt64 `json:"versionCode"`
 	VersionName  string           `json:"versionName"`
+	// UnPassReason 是审核不通过原因。
+	//
+	// 官方文档把它标为「非必填」，且成功响应示例里没有出现该字段 ——
+	// 因此要按「可能缺失」处理，不能假设被拒时就一定有。
+	// 用 FlexString 而不是 string：文档写的是 String，但这家渠道的
+	// versionCode 就已经实际返回字符串数字了，类型不能只看文档。
+	UnPassReason *jsonx.FlexString `json:"unPassReason"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -229,7 +236,25 @@ func (a appInfo) ToMarketInfo() channel.MarketInfo {
 	if a.ReviewStatus != nil {
 		raw = strconv.Itoa(*a.ReviewStatus)
 	}
-	return channel.NewMarketInfo(ID, state, version, raw)
+
+	info := channel.NewMarketInfo(ID, state, version, raw)
+	// 审核不通过原因。vivo 只给一段文字，没有附件 ——
+	// 举证截图与机型 log 只在网页后台的「审核报告」里
+	if reason := strings.TrimSpace(string(derefFlex(a.UnPassReason))); reason != "" {
+		info.Review = &channel.ReviewFeedback{Opinion: reason}
+	}
+	return info
+}
+
+// derefFlex 安全解引用可空的 FlexString。
+//
+// 注意不能用 channel 包之外的类型别名技巧 —— FlexString 的零值是空串，
+// 与「渠道返回了空串」在语义上不同，所以必须用指针区分。
+func derefFlex(v *jsonx.FlexString) jsonx.FlexString {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func truncate(s string) string {

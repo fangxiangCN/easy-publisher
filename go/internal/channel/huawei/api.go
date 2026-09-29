@@ -98,6 +98,8 @@ func (a *API) GetAppInfo(ctx context.Context, clientID, token, appID string) (Ap
 	type appInfoResp struct {
 		Ret     *ret     `json:"ret"`
 		AppInfo *AppInfo `json:"appInfo"`
+		// AuditInfo 与 appInfo 平级，不在 appInfo 内部 —— 这是官方文档的层级
+		AuditInfo *AuditInfo `json:"auditInfo"`
 	}
 	rawURL := a.url(pathAppInfo, map[string]string{"appId": appID})
 	body, err := a.get(ctx, rawURL, clientID, token)
@@ -119,7 +121,10 @@ func (a *API) GetAppInfo(ctx context.Context, clientID, token, appID string) (Ap
 			Raw:     truncate(body),
 		}
 	}
-	return *wrapper.AppInfo, nil
+	// 把平级的 auditInfo 并入返回结构，避免调用方再解析一次响应体
+	out := *wrapper.AppInfo
+	out.audit = wrapper.AuditInfo
+	return out, nil
 }
 
 // GetUploadURL 取文件上传地址。
