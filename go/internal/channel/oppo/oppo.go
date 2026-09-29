@@ -51,7 +51,7 @@ func (c *Channel) Params() []channel.ChannelParam {
 	return []channel.ChannelParam{
 		{
 			Name:        ParamClientID,
-			Description: "OPPO 开放平台的 client_id",
+			Description: "OPPO 开放平台的 client_id，在「账号管理 - API 密钥」中获取",
 			Required:    true,
 			Type:        channel.ParamText,
 		},

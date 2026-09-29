@@ -42,8 +42,9 @@ class HuaweiChannel : Channel {
     )
 
     override val params: List<ChannelParam> = listOf(
-        ChannelParam("client_id", "客户端ID"),
-        ChannelParam("client_secret", "秘钥"),
+        // 描述与 Go 版对齐：原先是「客户端ID」「秘钥」，后者还是错别字
+        ChannelParam("client_id", "AGC 项目的客户端 ID"),
+        ChannelParam("client_secret", "AGC 项目的客户端密钥"),
     )
 
     private val client = HuaweiConnectClient(CHANNEL_ID)

@@ -40,8 +40,9 @@ class HonorChannel : Channel {
     )
 
     override val params: List<ChannelParam> = listOf(
-        ChannelParam(name = CLIENT_ID, description = "客户端ID"),
-        ChannelParam(name = CLIENT_SECRET, description = "秘钥"),
+        // 描述与 Go 版对齐：原先是「客户端ID」「秘钥」，后者还是错别字
+        ChannelParam(name = CLIENT_ID, description = "荣耀开放平台的 client_id"),
+        ChannelParam(name = CLIENT_SECRET, description = "荣耀开放平台的 client_secret"),
     )
 
     override suspend fun upload(request: UploadRequest): ReleaseStage {

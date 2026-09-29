@@ -20,7 +20,7 @@ class EasyPublisher : SuspendingCliktCommand(name = "easy-publisher") {
     override fun help(context: Context) = """
         一键把 APK 提交到多个应用商店。
 
-        支持华为、小米、OPPO、vivo、荣耀。凭据保存在 ~/.easy-publisher/ 下（权限 600），
+        支持华为、小米、OPPO、vivo、荣耀、鸿蒙。凭据保存在 ~/.easy-publisher/ 下（权限 600），
         也可用环境变量 EP_<渠道>_<参数> 覆盖，CI 场景无需落盘。
 
         日志写 stderr，结果写 stdout，可直接管道给 jq 处理。

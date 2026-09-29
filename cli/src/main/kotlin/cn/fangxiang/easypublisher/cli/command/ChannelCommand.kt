@@ -53,12 +53,17 @@ private class ChannelList : SuspendingCliktCommand(name = "list") {
                                 "capability" to mapOf(
                                     "supportedStages" to channel.capability.supportedStages.map { it.name },
                                     "riskLevel" to channel.capability.riskLevel.name,
+                                    // 三个中文标签字段与 Go 版对齐：脚本在两版间切换
+                                    // 时不该因为字段缺失而取到 null
+                                    "riskLevelLabel" to channel.capability.riskLevel.label,
                                     "withdrawal" to channel.capability.withdrawal.name,
+                                    "withdrawalLabel" to channel.capability.withdrawal.label,
                                     "requiresExplicitConfirmation" to
                                         channel.capability.requiresExplicitConfirmation,
                                     "automaticRetryAfterSubmission" to
                                         channel.capability.automaticRetryAfterSubmission,
                                     "evidence" to channel.capability.evidence.name,
+                                    "evidenceLabel" to channel.capability.evidence.label,
                                     "verifiedScope" to channel.capability.verifiedScope,
                                     "note" to channel.capability.note,
                                 ),

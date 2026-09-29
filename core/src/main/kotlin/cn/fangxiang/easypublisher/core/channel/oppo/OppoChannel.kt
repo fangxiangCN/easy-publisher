@@ -53,7 +53,8 @@ class OppoChannel : Channel {
         ),
         ChannelParam(
             name = CLIENT_SECRET,
-            description = "OPPO 开放平台的 client_secret，与 client_id 成对获取",
+            description = "OPPO 开放平台的 client_secret。注意该凭据会出现在取 token 的 URL query 上"
+                + "（OPPO 接口设计如此，未能查证是否支持 POST form），建议缩短轮换周期",
         ),
     )
 
