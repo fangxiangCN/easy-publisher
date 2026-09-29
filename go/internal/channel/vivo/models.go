@@ -8,6 +8,7 @@ import (
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ID 是渠道标识。
@@ -127,11 +128,11 @@ func (e envelope) ensureSuccess(action, raw string) error {
 // 且一个字段缺失整个对象就构造不出来。这里校验推迟到 requireUploadResult，
 // 以便给出带字段名的中文提示。
 type apkResult struct {
-	PackageName  string `json:"packageName"`
-	Serialnumber string `json:"serialnumber"`
-	VersionCode  *int64 `json:"versionCode"`
-	VersionName  string `json:"versionName"`
-	FileMd5      string `json:"fileMd5"`
+	PackageName  string           `json:"packageName"`
+	Serialnumber string           `json:"serialnumber"`
+	VersionCode  *jsonx.FlexInt64 `json:"versionCode"`
+	VersionName  string           `json:"versionName"`
+	FileMd5      string           `json:"fileMd5"`
 }
 
 // UploadResult 是校验通过的上传结果，字段已确认非空。
@@ -176,16 +177,16 @@ func (r *apkResult) requireUploadResult(raw string) (UploadResult, error) {
 	return UploadResult{
 		PackageName:  r.PackageName,
 		Serialnumber: r.Serialnumber,
-		VersionCode:  *r.VersionCode,
+		VersionCode:  int64(*r.VersionCode),
 		FileMd5:      r.FileMd5,
 	}, nil
 }
 
 // appInfo 是应用详情。审核状态字段在 vivo 文档里叫 status。
 type appInfo struct {
-	ReviewStatus *int   `json:"status"`
-	VersionCode  *int64 `json:"versionCode"`
-	VersionName  string `json:"versionName"`
+	ReviewStatus *int             `json:"status"`
+	VersionCode  *jsonx.FlexInt64 `json:"versionCode"`
+	VersionName  string           `json:"versionName"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -213,7 +214,7 @@ func (a appInfo) ToMarketInfo() channel.MarketInfo {
 
 	var version *channel.Version
 	if a.VersionCode != nil && strings.TrimSpace(a.VersionName) != "" {
-		version = &channel.Version{Code: *a.VersionCode, Name: a.VersionName}
+		version = &channel.Version{Code: int64(*a.VersionCode), Name: a.VersionName}
 	}
 
 	raw := ""

@@ -734,3 +734,49 @@ func TestParamsDeclaration(t *testing.T) {
 		}
 	}
 }
+
+// TestRealResponseShapesAreParsed 覆盖荣耀响应里「类型与文档不符」的字段。
+//
+// 回归背景：Go 的 encoding/json 是严格类型匹配，而荣耀的 appId 实际返回裸数字
+// （文档写作字符串）。原来的测试 fixture 用的是 "app-123" 这种理想形态，
+// 所以解析缺陷在单元测试里测不出来 —— 只有真实调用才暴露。
+// 这个测试用线上响应的真实形状，把当时的失败固化成回归保护。
+func TestRealResponseShapesAreParsed(t *testing.T) {
+	ch, fake := newFakeHonor(t)
+	// appId 是数字，不是字符串
+	fake.set("/openapi/v1/publish/get-app-id",
+		`{"code":0,"msg":"Success","data":[{"packageName":"com.example.app","appId":900876322}]}`)
+	// versionCode 也可能以字符串返回
+	fake.set("/openapi/v1/publish/get-app-current-release",
+		`{"code":0,"msg":"ok","data":{"auditResult":1,"versionCode":"1000","versionName":"1.0.0"}}`)
+	fake.set("/openapi/v1/publish/get-app-detail",
+		`{"code":0,"msg":"ok","data":{"languageInfo":[{"languageId":"zh-CN","languageName":"简体中文"}]}}`)
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamClientID: "k", ParamClientSecret: "s",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatalf("真实形状的响应应能解析，却失败: %v", err)
+	}
+	if info.ReviewState != channel.ReviewOnline {
+		t.Errorf("状态 = %v, 期望已上架", info.ReviewState)
+	}
+	if info.LastVersion == nil {
+		t.Fatal("versionCode 为字符串数字时应解析出版本信息")
+	}
+	if info.LastVersion.Code != 1000 {
+		t.Errorf("versionCode = %d, 期望 1000", info.LastVersion.Code)
+	}
+	// appId 是数字，须原样转成字符串 "900876322" 用于后续请求
+	if r, ok := fake.find("get-app-current-release"); ok {
+		if got := r.Query.Get("appId"); got != "900876322" {
+			t.Errorf("后续请求携带的 appId = %q, 期望 \"900876322\"（数字须转为十进制字符串）", got)
+		}
+	} else {
+		t.Error("未发出 get-app-current-release 请求")
+	}
+}

@@ -106,7 +106,7 @@ func TestUploadFullFlowRequestShapes(t *testing.T) {
 	srv, fake := newFakeOppo(t, map[string]string{
 		pathToken: `{"errno":0,"data":{"access_token":"tok-abc"}}`,
 		pathAppInfo: `{"errno":0,"data":{"summary":"一句话","detail_desc":"详细",` +
-			`"version_code":1000,"version_name":"1.0.0","audit_status":111,` +
+			`"version_code":"1000","version_name":"1.0.0","audit_status":111,` +
 			`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 			`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 			`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +
@@ -561,7 +561,7 @@ func testRequest(t *testing.T, path string) channel.UploadRequest {
 
 func appInfoResponse() string {
 	return `{"errno":0,"data":{"summary":"一句话","detail_desc":"详细",` +
-		`"version_code":1000,"version_name":"1.0.0","audit_status":111,` +
+		`"version_code":"1000","version_name":"1.0.0","audit_status":111,` +
 		`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 		`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 		`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +

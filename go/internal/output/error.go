@@ -10,11 +10,11 @@ import (
 
 // ErrorJSON 是失败结果的统一形状，便于脚本判断。
 type ErrorJSON struct {
-	OK      bool   `json:"ok"`
-	Kind    string `json:"kind"`
+	OK      bool    `json:"ok"`
+	Kind    string  `json:"kind"`
 	Channel *string `json:"channel"`
 	Code    *string `json:"code"`
-	Message string `json:"message"`
+	Message string  `json:"message"`
 	// Retryable 越过送审点后恒为 false
 	Retryable bool `json:"retryable"`
 	// Phase 解释「为什么不可重试」：不是错误不可恢复，

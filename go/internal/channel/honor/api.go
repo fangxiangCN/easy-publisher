@@ -101,7 +101,7 @@ func (a *API) GetAppID(ctx context.Context, token, packageName string) (string, 
 		return "", err
 	}
 	for _, e := range list {
-		if id := strings.TrimSpace(e.AppID); id != "" {
+		if id := strings.TrimSpace(string(e.AppID)); id != "" {
 			return id, nil
 		}
 	}

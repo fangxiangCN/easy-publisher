@@ -19,6 +19,7 @@ import (
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/httpx"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ID 是渠道标识。
@@ -76,22 +77,22 @@ type tokenResponse struct {
 
 // AppInfo 是应用信息。字段名保持与接口一致的 snake_case 映射，便于和 OPPO 文档对照。
 type AppInfo struct {
-	Summary          string `json:"summary"`
-	DetailDesc       string `json:"detail_desc"`
-	VersionCode      *int64 `json:"version_code"`
-	VersionName      string `json:"version_name"`
-	AuditStatus      *int   `json:"audit_status"`
-	PrivacyURL       string `json:"privacy_source_url"`
-	SecondCategory   string `json:"ver_second_category_id"`
-	ThirdCategory    string `json:"ver_third_category_id"`
-	IconURL          string `json:"icon_url"`
-	PicURL           string `json:"pic_url"`
-	TestDesc         string `json:"test_desc"`
-	BusinessUsername string `json:"business_username"`
-	BusinessEmail    string `json:"business_email"`
-	BusinessMobile   string `json:"business_mobile"`
-	CopyrightURL     string `json:"copyright_url"`
-	ElectronicCert   string `json:"electronic_cert_url"`
+	Summary          string           `json:"summary"`
+	DetailDesc       string           `json:"detail_desc"`
+	VersionCode      *jsonx.FlexInt64 `json:"version_code"`
+	VersionName      string           `json:"version_name"`
+	AuditStatus      *jsonx.FlexInt64 `json:"audit_status"`
+	PrivacyURL       string           `json:"privacy_source_url"`
+	SecondCategory   string           `json:"ver_second_category_id"`
+	ThirdCategory    string           `json:"ver_third_category_id"`
+	IconURL          string           `json:"icon_url"`
+	PicURL           string           `json:"pic_url"`
+	TestDesc         string           `json:"test_desc"`
+	BusinessUsername string           `json:"business_username"`
+	BusinessEmail    string           `json:"business_email"`
+	BusinessMobile   string           `json:"business_mobile"`
+	CopyrightURL     string           `json:"copyright_url"`
+	ElectronicCert   string           `json:"electronic_cert_url"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -102,8 +103,8 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
 	raw := ""
 	if a.AuditStatus != nil {
-		raw = strconv.Itoa(*a.AuditStatus)
-		switch *a.AuditStatus {
+		raw = strconv.FormatInt(int64(*a.AuditStatus), 10)
+		switch int64(*a.AuditStatus) {
 		case auditOnline:
 			state = channel.ReviewOnline
 		case auditRejected:
@@ -114,7 +115,7 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	}
 	var version *channel.Version
 	if a.VersionCode != nil && strings.TrimSpace(a.VersionName) != "" {
-		version = &channel.Version{Code: *a.VersionCode, Name: a.VersionName}
+		version = &channel.Version{Code: int64(*a.VersionCode), Name: a.VersionName}
 	}
 	return channel.NewMarketInfo(ID, state, version, raw)
 }

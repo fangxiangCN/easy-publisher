@@ -30,6 +30,7 @@ import (
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/httpx"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ---- 黄金向量 ----
@@ -809,7 +810,7 @@ func TestVersionMissingDoesNotFabricate(t *testing.T) {
 	}
 
 	// 有版本号时要正常带出来
-	code := int64(1020)
+	code := jsonx.FlexInt64(1020)
 	resp.PackageInfo.VersionCode = &code
 	resp.PackageInfo.VersionName = "1.2.0"
 	got := resp.ToMarketInfo()

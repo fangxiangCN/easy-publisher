@@ -26,9 +26,9 @@ import (
 
 // defaultResponses 是各接口的默认成功响应。
 var defaultResponses = map[string]string{
-	methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3,"versionCode":1000,"versionName":"1.0.0"}}`,
+	methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3,"versionCode":"1000","versionName":"1.0.0"}}`,
 	methodUploadAPK: `{"code":0,"msg":"ok","data":{"packageName":"com.example.app",` +
-		`"serialnumber":"sn-default","versionCode":1020,"versionName":"1.2.0","fileMd5":"md5-default"}}`,
+		`"serialnumber":"sn-default","versionCode":"1020","versionName":"1.2.0","fileMd5":"md5-default"}}`,
 	methodSubmit: `{"code":0,"subCode":0,"msg":"ok"}`,
 }
 
@@ -126,9 +126,9 @@ func testRequest(path string, stopAfter channel.ReleaseStage) channel.UploadRequ
 
 func TestUploadFullFlowRequestShapes(t *testing.T) {
 	srv, recorded := newFakeVivo(t, map[string]string{
-		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3,"versionCode":1000,"versionName":"1.0.0"}}`,
+		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3,"versionCode":"1000","versionName":"1.0.0"}}`,
 		methodUploadAPK: `{"code":0,"msg":"ok","data":{"packageName":"com.example.app",` +
-			`"serialnumber":"sn-123","versionCode":1020,"versionName":"1.2.0","fileMd5":"abc"}}`,
+			`"serialnumber":"sn-123","versionCode":"1020","versionName":"1.2.0","fileMd5":"abc"}}`,
 		methodSubmit: `{"code":0,"subCode":0,"msg":"ok"}`,
 	})
 
@@ -373,7 +373,7 @@ func TestSubmitFailureIsMarkedAtSubmissionPoint(t *testing.T) {
 	srv, _ := newFakeVivo(t, map[string]string{
 		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3,"versionCode":1,"versionName":"1.0"}}`,
 		methodUploadAPK: `{"code":0,"msg":"ok","data":{"packageName":"com.example.app",` +
-			`"serialnumber":"sn","versionCode":1020,"fileMd5":"m"}}`,
+			`"serialnumber":"sn","versionCode":"1020","fileMd5":"m"}}`,
 		methodSubmit: `<html>502 Bad Gateway</html>`,
 	})
 	path := testArtifactFile(t, 512)
@@ -442,7 +442,7 @@ func TestQueryMarketMapsStatus(t *testing.T) {
 		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
 			srv, _ := newFakeVivo(t, map[string]string{
 				methodGetAppInfo: fmt.Sprintf(
-					`{"code":0,"msg":"ok","data":{"status":%d,"versionCode":1000,"versionName":"1.0.0"}}`,
+					`{"code":0,"msg":"ok","data":{"status":%d,"versionCode":"1000","versionName":"1.0.0"}}`,
 					tc.status),
 			})
 			info, err := NewWithBaseURL(srv.URL).QueryMarket(context.Background(), channel.MarketQuery{
@@ -489,7 +489,7 @@ func TestUploadResultMissingFieldsIsProtocolError(t *testing.T) {
 	srv, _ := newFakeVivo(t, map[string]string{
 		methodGetAppInfo: `{"code":0,"msg":"ok","data":{"status":3}}`,
 		// 缺 serialnumber 与 fileMd5
-		methodUploadAPK: `{"code":0,"msg":"ok","data":{"packageName":"com.example.app","versionCode":1020}}`,
+		methodUploadAPK: `{"code":0,"msg":"ok","data":{"packageName":"com.example.app","versionCode":"1020"}}`,
 	})
 	path := testArtifactFile(t, 512)
 

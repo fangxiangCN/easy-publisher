@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ID 是渠道标识。
@@ -69,10 +70,10 @@ const (
 
 // PackageInfo 是应用信息。
 type PackageInfo struct {
-	AppName     string `json:"appName"`
-	VersionName string `json:"versionName"`
-	VersionCode *int64 `json:"versionCode"`
-	PackageName string `json:"packageName"`
+	AppName     string           `json:"appName"`
+	VersionName string           `json:"versionName"`
+	VersionCode *jsonx.FlexInt64 `json:"versionCode"`
+	PackageName string           `json:"packageName"`
 }
 
 // AppInfoResp 是 dev/query 的响应。

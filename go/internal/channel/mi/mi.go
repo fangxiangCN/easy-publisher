@@ -185,7 +185,7 @@ func (r AppInfoResp) ToMarketInfo() channel.MarketInfo {
 	var version *channel.Version
 	if r.PackageInfo != nil && r.PackageInfo.VersionCode != nil {
 		version = &channel.Version{
-			Code: *r.PackageInfo.VersionCode,
+			Code: int64(*r.PackageInfo.VersionCode),
 			Name: r.PackageInfo.VersionName,
 		}
 	}

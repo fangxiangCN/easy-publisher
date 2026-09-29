@@ -12,6 +12,7 @@ import (
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
+	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
 )
 
 // ID 是渠道标识。
@@ -106,7 +107,9 @@ type tokenResp struct {
 // appIDEntry 是 get-app-id 的返回项。
 type appIDEntry struct {
 	PackageName string `json:"packageName"`
-	AppID       string `json:"appId"`
+	// appId 在荣耀文档里写作字符串，实际返回裸数字（如 900876322），
+	// 用 FlexString 同时接受两种形态。
+	AppID jsonx.FlexString `json:"appId"`
 }
 
 // AppInfo 是应用详情。
@@ -125,8 +128,8 @@ type LanguageInfo struct {
 
 // PubReleaseInfo 是线上版本信息。
 type PubReleaseInfo struct {
-	VersionCode *int64 `json:"versionCode"`
-	VersionName string `json:"versionName"`
+	VersionCode *jsonx.FlexInt64 `json:"versionCode"`
+	VersionName string           `json:"versionName"`
 }
 
 // uploadFile 是申请上传地址时的文件描述。
@@ -187,9 +190,9 @@ type ReviewState struct {
 	// AuditResult 取值：
 	//
 	//	0 审核中 / 1 审核通过 / 2 审核不通过 / 3 其他非审核状态 / 4 编辑中未提审
-	AuditResult *int   `json:"auditResult"`
-	VersionCode *int64 `json:"versionCode"`
-	VersionName string `json:"versionName"`
+	AuditResult *int             `json:"auditResult"`
+	VersionCode *jsonx.FlexInt64 `json:"versionCode"`
+	VersionName string           `json:"versionName"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -219,7 +222,7 @@ func (r ReviewState) ToMarketInfo() channel.MarketInfo {
 
 	var version *channel.Version
 	if r.VersionCode != nil {
-		version = &channel.Version{Code: *r.VersionCode, Name: r.VersionName}
+		version = &channel.Version{Code: int64(*r.VersionCode), Name: r.VersionName}
 	}
 	return channel.NewMarketInfo(ID, state, version, raw)
 }
