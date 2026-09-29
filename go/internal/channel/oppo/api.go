@@ -100,6 +100,29 @@ type AppInfo struct {
 	BusinessMobile    string `json:"business_mobile"`
 	CopyrightURL      string `json:"copyright_url"`
 	ElectronicCert    string `json:"electronic_cert_url"`
+
+	// 以下四个是审核意见（官方文档 id=11004「查询普通包详情」有定义）。
+	//
+	// **不要拿 RefuseReason 直接展示给用户**：实测它把审核员的测试环境也拼了进去，
+	// 例如「测试机型：OPPO Find X9；,Android版本：16.0.5；,软件版本：PLJ110；」
+	// —— 这不是给应用方看的问题描述。真正需要处理的内容在后面几条。
+	//
+	// RefuseReasonWithSugg 是**按条目配对**的（reason + advice），与 OPPO 后台
+	// 界面上展示的一致。优先用它：直接逐条呈现「问题 + 建议」，
+	// 不必自己按逗号切分那个拼接串（而拼接串里本身就含逗号，切分不可靠）。
+	RefuseReason         string           `json:"refuse_reason"`
+	RefuseAdvice         string           `json:"refuse_advice"`
+	RefuseFile           string           `json:"refuse_file"`
+	RefuseReasonWithSugg []OppoRefuseItem `json:"refuse_reason_with_sugg"`
+}
+
+// OppoRefuseItem 是审核意见的一条，reason 与 advice 配对。
+//
+// 环境信息条目（测试机型、Android 版本、软件版本）的 advice 是空串，
+// 据此可以只挑出真正需要处理的条目；工具不做内容判断，把筛选后的原文交给使用者。
+type OppoRefuseItem struct {
+	Reason string `json:"reason"`
+	Advice string `json:"advice"`
 }
 
 // ToMarketInfo 转成渠道无关的状态。
@@ -138,7 +161,108 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	if a.VersionCode != nil && strings.TrimSpace(a.VersionName) != "" {
 		version = &channel.Version{Code: int64(*a.VersionCode), Name: a.VersionName}
 	}
-	return channel.NewMarketInfo(ID, state, version, raw)
+
+	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.Review = a.reviewFeedback()
+	return info
+}
+
+// reviewFeedback 组装审核意见。
+//
+// 三个数据源的取舍：
+//
+//   - RefuseReasonWithSugg 优先：按条目配对（reason + advice），与后台界面一致，
+//     且能通过 advice 是否为空区分「测试环境信息」与「真实问题」。
+//   - RefuseAdvice 作为整体建议补进 Notes —— 实测它比逐条 advice 更完整
+//     （逐条里只有最后一条带 advice，而 RefuseAdvice 是一段完整的修改指引）。
+//   - RefuseFile 是审核员给的附件（实测是 zip，含截图），放 Attachments。
+//
+// **RefuseReason 不直接用**：实测它把测试环境信息拼在最前面，原样展示会误导使用者
+// 以为「测试机型」是需要处理的问题。仅在 RefuseReasonWithSugg 缺失时回退到它，
+// 保证有内容可取。
+func (a AppInfo) reviewFeedback() *channel.ReviewFeedback {
+	fb := &channel.ReviewFeedback{}
+
+	// 逐条意见：跳过纯环境信息（advice 为空且 reason 以「测试机型/Android版本/软件版本」开头）
+	var opinions []string
+	for _, item := range a.RefuseReasonWithSugg {
+		reason := strings.TrimSpace(item.Reason)
+		if reason == "" {
+			continue
+		}
+		advice := strings.TrimSpace(item.Advice)
+		if advice == "" && isEnvironmentNote(reason) {
+			continue
+		}
+		if advice != "" {
+			opinions = append(opinions, reason+" —— 建议："+advice)
+		} else {
+			opinions = append(opinions, reason)
+		}
+	}
+
+	if len(opinions) > 0 {
+		fb.Opinion = strings.Join(opinions, "\n")
+	} else if fallback := strings.TrimSpace(a.RefuseReason); fallback != "" && !isAllEnvironmentNotes(fallback) {
+		// 回退：with_sugg 缺失时用原始串，但仅在它确实含有非环境信息时。
+		//
+		// 实测**应用正常上线时 refuse_reason 也有值**，内容全是审核员的测试环境
+		// （「测试机型：OPPO Find X9；,Android版本：16.0.5；,软件版本：PLJ110；」）。
+		// 原样带出会让「已上架」的应用也挂一条「审核意见」，纯属噪音且误导。
+		fb.Opinion = fallback
+	}
+
+	// RefuseAdvice 不单独成为一条 Note。
+	//
+	// 实测它与最后一条 with_sugg 的 advice 是**同一段文本**（逐条里的 advice 就是
+	// 从这里派生的），两条并排展示完全重复。只有当 with_sugg 整体缺失、
+	// Opinion 走了 RefuseReason 回退时，它才是唯一可用的建议来源。
+	if len(opinions) == 0 {
+		if advice := strings.TrimSpace(a.RefuseAdvice); advice != "" {
+			fb.Notes = append(fb.Notes, channel.ReviewNote{
+				Kind:    "修改建议",
+				Opinion: advice,
+			})
+		}
+	}
+
+	if file := strings.TrimSpace(a.RefuseFile); file != "" {
+		fb.Attachments = append(fb.Attachments, file)
+	}
+	return fb
+}
+
+// isAllEnvironmentNotes 判断逗号拼接的原始串是否只含环境信息。
+//
+// refuse_reason 用逗号连接各条目，而条目自身以「；」结尾 —— 按逗号切分后逐条判断。
+func isAllEnvironmentNotes(raw string) bool {
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if !isEnvironmentNote(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// isEnvironmentNote 判断一条意见是否为审核员的测试环境信息。
+//
+// 实测这些条目固定以「测试机型」「Android版本」「软件版本」开头，
+// 且 advice 为空 —— 它们不构成需要处理的问题，混在意见里会干扰阅读。
+func isEnvironmentNote(reason string) bool {
+	for _, prefix := range []string{"测试机型", "Android版本", "Android 版本", "软件版本"} {
+		if strings.HasPrefix(reason, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type uploadURLResponse struct {

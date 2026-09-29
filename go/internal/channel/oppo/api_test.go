@@ -687,3 +687,132 @@ func TestSubmitPollsTaskState(t *testing.T) {
 		}
 	})
 }
+
+// TestReviewFeedbackFromRealResponse 覆盖审核意见的组装。
+//
+// 数据取自 2026-09-29 的真实响应（gwy 被拒那次）。要点：
+//
+//  1. `refuse_reason` 把审核员的**测试环境**拼在最前面，原样展示会误导使用者
+//     以为「测试机型：find x9」是需要处理的问题 —— 必须从 with_sugg 里挑。
+//  2. `refuse_advice` 是完整的一段修改指引，比逐条 advice 更全（逐条里只有
+//     最后一条带 advice）。
+//  3. `refuse_file` 是审核员附件（实测为 zip）。
+func TestReviewFeedbackFromRealResponse(t *testing.T) {
+	raw := `{"errno":0,"data":{` +
+		`"audit_status":"444","version_code":"45","version_name":"2026.09.28",` +
+		`"refuse_reason":"测试机型：find x9 ；,Android版本：16；,软件版本：PLJ110_16.0.5.701(CN01B60P01)；,` +
+		`1、您的应用内存在付费会员项目，需在会员订阅支付界面，以醒目的方式提示用户“会员服务协议”。",` +
+		`"refuse_advice":"您需在用户付费界面明确展示“会员服务协议”相关文档链接，以供用户阅读。",` +
+		`"refuse_file":"https://audit-platform-cn.heytapimage.com/content-audit/202609/29/xxx.zip",` +
+		`"refuse_reason_with_sugg":[` +
+		`{"reason":"测试机型：find x9 ；","advice":""},` +
+		`{"reason":"Android版本：16；","advice":""},` +
+		`{"reason":"软件版本：PLJ110_16.0.5.701(CN01B60P01)；","advice":""},` +
+		`{"reason":"1、您的应用内存在付费会员项目，需在会员订阅支付界面，以醒目的方式提示用户“会员服务协议”。",` +
+		`"advice":"您需在用户付费界面明确展示“会员服务协议”相关文档链接，以供用户阅读。"}]}}`
+
+	var resp envelope
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var appInfo AppInfo
+	if err := unmarshalData(raw, &appInfo); err != nil {
+		t.Fatal(err)
+	}
+	info := appInfo.ToMarketInfo()
+
+	if info.ReviewState != channel.ReviewRejected {
+		t.Errorf("audit_status=444 应判为被拒，实际 %v", info.ReviewState)
+	}
+	if info.Review == nil || info.Review.Empty() {
+		t.Fatal("有审核意见却未带出")
+	}
+
+	opinion := info.Review.Opinion
+	// 环境信息不应出现在意见里
+	for _, noise := range []string{"测试机型", "Android版本", "软件版本"} {
+		if strings.Contains(opinion, noise) {
+			t.Errorf("意见里混入了测试环境信息 %q：\n%s", noise, opinion)
+		}
+	}
+	// 真正的问题与建议要在
+	if !strings.Contains(opinion, "会员服务协议") {
+		t.Errorf("真实问题缺失：%s", opinion)
+	}
+	if !strings.Contains(opinion, "建议：") {
+		t.Errorf("应把 advice 与 reason 配成一条：%s", opinion)
+	}
+
+	// refuse_advice 不重复成 Note：实测它就是最后一条 with_sugg 的 advice，
+	// 两条并排展示完全重复。它的价值在 with_sugg 缺失时作为回退（见下一个测试）。
+	if len(info.Review.Notes) != 0 {
+		t.Errorf("with_sugg 可用时不应再产出 Note（内容重复）：%+v", info.Review.Notes)
+	}
+	// 附件要带出
+	if len(info.Review.Attachments) != 1 || !strings.HasSuffix(info.Review.Attachments[0], ".zip") {
+		t.Errorf("refuse_file 应作为附件带出：%+v", info.Review.Attachments)
+	}
+}
+
+// TestReviewFeedbackFallsBackToPlainReason 确认 with_sugg 缺失时仍有内容可用。
+//
+// 此时 refuse_advice 是唯一的建议来源，应当作为 Note 保留。
+func TestReviewFeedbackFallsBackToPlainReason(t *testing.T) {
+	appInfo := AppInfo{
+		RefuseReason: "资源下架理由外部",
+		RefuseAdvice: "请补充版权证明材料",
+	}
+	fb := appInfo.reviewFeedback()
+	if fb.Empty() {
+		t.Fatal("with_sugg 缺失时应回退到 refuse_reason，不能什么都不给")
+	}
+	if fb.Opinion != "资源下架理由外部" {
+		t.Errorf("Opinion = %q", fb.Opinion)
+	}
+	if len(fb.Notes) != 1 || fb.Notes[0].Opinion != "请补充版权证明材料" {
+		t.Errorf("回退路径下 refuse_advice 应成为 Note：%+v", fb.Notes)
+	}
+}
+
+// TestReviewFeedbackEmptyWhenClean 确认无意见时返回空反馈（不产生噪音）。
+func TestReviewFeedbackEmptyWhenClean(t *testing.T) {
+	// 真实场景：应用已上线，refuse_* 全是空串 —— 此时不应展示任何审核意见
+	appInfo := AppInfo{RefuseReason: "", RefuseAdvice: "", RefuseFile: ""}
+	if fb := appInfo.reviewFeedback(); !fb.Empty() {
+		t.Errorf("干净状态下不应有反馈：%+v", fb)
+	}
+}
+
+// TestReviewFeedbackIgnoresEnvironmentOnlyReason 覆盖一个实测到的易错点。
+//
+// **应用正常上线时 refuse_reason 也有值**，内容全是审核员的测试环境：
+//
+//	"测试机型：OPPO Find X9；,Android版本：16.0.5；,软件版本：PLJ110；"
+//
+// 若原样带出，「已上架」的应用也会挂一条「审核意见」—— 纯噪音，还会让人
+// 误以为上线失败。因此仅当串里确有非环境信息时才作为意见展示。
+func TestReviewFeedbackIgnoresEnvironmentOnlyReason(t *testing.T) {
+	// 真实场景：civilian 已上线（audit_status=111），refuse_reason 只有环境信息
+	appInfo := AppInfo{
+		RefuseReason: "测试机型：OPPO Find X9；,Android版本：16.0.5；,软件版本：PLJ110；",
+	}
+	fb := appInfo.reviewFeedback()
+	if !fb.Empty() {
+		t.Errorf("只有测试环境信息时不应产出审核意见，实际：%+v", fb)
+	}
+}
+
+// TestReviewFeedbackKeepsRealIssueInRawReason 确认混合内容时不会把真问题一起滤掉。
+func TestReviewFeedbackKeepsRealIssueInRawReason(t *testing.T) {
+	// with_sugg 缺失，只能从原始串判断；环境信息在前、真问题在后
+	appInfo := AppInfo{
+		RefuseReason: "测试机型：find x9 ；,Android版本：16；,1、付费会员界面需展示会员服务协议。",
+	}
+	fb := appInfo.reviewFeedback()
+	if fb.Empty() {
+		t.Fatal("串里含有真实问题时不应判为空")
+	}
+	if !strings.Contains(fb.Opinion, "会员服务协议") {
+		t.Errorf("真实问题应保留：%q", fb.Opinion)
+	}
+}

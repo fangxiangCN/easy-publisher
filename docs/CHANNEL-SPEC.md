@@ -338,7 +338,7 @@ GET ?method=app.sync.update.app    送审
 | 荣耀 | `auditMessage` + `auditAttachment` | `get-app-current-release` 的 `data` | 附件是审核员截图，常比文字更具体 |
 | 鸿蒙 | `auditOpinion` | `v3/app-info` 的 `auditInfo` | 与 `appInfo` 平级 |
 | vivo | `unPassReason` | `app.query.details` 的 `data` | 文档标为「非必填」，可能缺失 |
-| OPPO | `refuse_reason` / `refuse_advice` / `refuse_file` | `resource/v1/app/info` | ⚠️ **仅第三方文档镜像，未证实** |
+| OPPO | `refuse_reason_with_sugg`（优先）/ `refuse_advice` / `refuse_file` | `resource/v1/app/info` | ✅ 官方文档 id=11004 确认，已实测 |
 | 小米 | — | — | API 完全不提供状态查询 |
 
 三条需要注意的：
@@ -349,6 +349,12 @@ GET ?method=app.sync.update.app    送审
   （`"审核通过：XXX"`）—— 状态与意见是两个独立字段。
 - **vivo 有个陷阱字段。** `app.query.stage.details` 里也有 `auditOpinion`，
   名字像审核意见，官方定义实为「催撤审 1-催审 2-撤审」。别用错。
+- **OPPO 用 `refuse_reason_with_sugg` 而不是 `refuse_reason`。** 后者把审核员的
+  测试环境也拼了进去（`测试机型：OPPO Find X9；,Android版本：16.0.5；,软件版本：PLJ110；`），
+  直接展示会让人误以为「测试机型」是需要处理的问题。`with_sugg` 是按条目配对的
+  （`reason` + `advice`），与后台界面一致：环境条目的 `advice` 为空，
+  真实问题则带建议。**另一个坑：应用正常上线时 `refuse_reason` 也有值**，
+  内容全是测试环境 —— 不做过滤会让「已上架」的应用也挂一条「审核意见」。
 
 网页后台有而 API 没有的：华为的「审核报告」含结构化详情与日志下载，vivo 有测试录屏与
 机型 log，OPPO 有打回附件。这些只在后台可见。
