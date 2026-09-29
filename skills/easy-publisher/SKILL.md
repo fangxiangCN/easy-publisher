@@ -1,11 +1,13 @@
 ---
 name: easy-publisher
-description: 把 Android APK 提交到华为、小米、OPPO、vivo、荣耀五个应用商店。当用户要求发版、上传 APK 到应用市场、查询应用在商店的审核状态或线上版本号时使用。
+description: 把 Android APK（或鸿蒙的 .app）提交到华为、小米、OPPO、vivo、荣耀、鸿蒙六个应用商店。当用户要求发版、上传 APK 到应用市场、查询应用在商店的审核状态或线上版本号时使用。
 ---
 
 # easy-publisher
 
-通过 `easy-publisher` 命令行工具向国内五个主流应用商店提交新版本。
+通过 `easy-publisher` 命令行工具向国内主流应用商店提交新版本。
+
+它是一个独立的静态二进制，不需要 JDK 或任何运行时。
 
 ## 最重要的一件事
 

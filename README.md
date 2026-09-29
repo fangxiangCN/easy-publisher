@@ -29,17 +29,26 @@
 
 需要 JDK 17+。
 
+仓库里有两个实现：**Go 版**（推荐）与 Kotlin 版（参照实现）。
+
+### Go 版
+
+单个静态二进制，不需要 JDK 或任何运行时。交叉编译也只需换 `GOOS`/`GOARCH`。
+
 ```bash
-./gradlew :cli:shadowJar
-# 产物：cli/build/libs/easy-publisher-1.0.0.jar
-java -jar cli/build/libs/easy-publisher-1.0.0.jar --help
+cd go
+go build -o easy-publisher ./cmd/easy-publisher
+go build -o easy-publisher-mcp ./cmd/easy-publisher-mcp
 ```
 
-建议包一层脚本，让 `easy-publisher` 直接可用：
+### Kotlin 版
+
+需要 JDK 17。保留它是因为它同时充当 Go 版的参照实现，以及签名黄金向量的生成器
+（见 `go/testdata/golden/signing.json`）。
 
 ```bash
-#!/usr/bin/env bash
-exec java -jar /path/to/easy-publisher-1.0.0.jar "$@"
+./gradlew :cli:shadowJar
+java -jar cli/build/libs/easy-publisher-1.0.0.jar --help
 ```
 
 ## 快速开始
