@@ -1,5 +1,5 @@
 {
-  "_comment": "由 GoldenVectorTest 生成，供 Go 重写时逐字节比对。重新生成见该测试的 KDoc。",
+  "_comment": "由 scripts/gen-golden-vectors.py 生成，供 Go 实现逐字节比对。用 Python 独立实现是为了避免自证 —— 详见该脚本的注释。",
   "fixedTimestampMillis": 1700000000000,
   "oppo": [
     {

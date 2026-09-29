@@ -50,8 +50,8 @@ func loadGolden(t *testing.T) goldenFile {
 	t.Helper()
 	data, err := os.ReadFile(goldenPath)
 	if err != nil {
-		t.Fatalf("读取黄金向量失败（%v）。先在仓库根目录运行：\n"+
-			"  ./gradlew :core:test --tests \"*GoldenVectorTest*\" -Dgolden.update=true --rerun-tasks", err)
+		t.Fatalf("读取黄金向量失败（%v）。在仓库根目录运行以下命令重新生成：\n"+
+			"  python3 scripts/gen-golden-vectors.py", err)
 	}
 	var g goldenFile
 	if err := json.Unmarshal(data, &g); err != nil {

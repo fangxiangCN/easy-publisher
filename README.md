@@ -27,13 +27,8 @@
 
 ## 安装
 
-需要 JDK 17+。
-
-仓库里有两个实现：**Go 版**（推荐）与 Kotlin 版（参照实现）。
-
-### Go 版
-
-单个静态二进制，不需要 JDK 或任何运行时。交叉编译也只需换 `GOOS`/`GOARCH`。
+需要 Go 1.24+。产物是单个静态二进制，**不需要 JDK 或任何运行时**；
+交叉编译也只需换 `GOOS`/`GOARCH`。
 
 ```bash
 cd go
@@ -41,15 +36,8 @@ go build -o easy-publisher ./cmd/easy-publisher
 go build -o easy-publisher-mcp ./cmd/easy-publisher-mcp
 ```
 
-### Kotlin 版
-
-需要 JDK 17。保留它是因为它同时充当 Go 版的参照实现，以及签名黄金向量的生成器
-（见 `go/testdata/golden/signing.json`）。
-
-```bash
-./gradlew :cli:shadowJar
-java -jar cli/build/libs/easy-publisher-1.0.0.jar --help
-```
+> 早期版本还有一个 Kotlin 实现，作为参照用。它已删除 —— 详见文末
+> 「为什么删掉了 Kotlin 版」。
 
 ## 快速开始
 
@@ -133,7 +121,7 @@ easy-publisher upload --app com.example.harmony --artifact ./demo.app --desc "�
 ## MCP server
 
 ```bash
-./gradlew :mcp:shadowJar
+cd go && go build -o easy-publisher-mcp ./cmd/easy-publisher-mcp
 ```
 
 在 MCP 客户端里配置：
@@ -207,15 +195,17 @@ stdout 被传输层独占：进程启动时先把真正的 fd 1 交给 transport
 ## 构建与测试
 
 ```bash
-# Go 版
 cd go
 go build ./...
-go test ./...            # 288 个测试
-go test ./... -race      # 并发路径的验证，编排层有并发
+go test ./...                     # 332 个测试
+go test ./... -race               # 编排层有并发，-race 不是可选项
 go vet ./...
 
-# Kotlin 版（参照实现）
-./gradlew build
+# 校验签名黄金向量与生成器是否一致
+python3 scripts/gen-golden-vectors.py --check
+
+# 验证「已提交的树」可构建（防 gitignore 误伤源码那类问题）
+./scripts/verify-committed-tree.sh
 ```
 
 ## 已知限制
@@ -301,12 +291,35 @@ easy-publisher upload --app <包名> --artifact <包> --desc x --stop-after arti
 - 不移植关闭 TLS 校验的调试客户端
 - 全部响应模型字段可空，避免渠道少返回一个字段就崩溃
 - 结构化错误模型，区分 7 类原因并标注失败阶段
-- 依赖升级，规避 gson 2.8.6、bcprov-jdk15on 1.62、commons-codec 1.4 的已知问题
-- Gradle Wrapper 改用官方源并校验 sha256
+- 不依赖 gson / BouncyCastle / commons-codec：Go 版用标准库的 `encoding/json`、
+  `crypto/rsa`、`crypto/md5`，顺带规避了原依赖的已知问题
+  （gson 2.8.6 的 CVE-2022-25647、已停维护的 bcprov-jdk15on 等）
 - 新增鸿蒙 AppGallery 渠道（上游不支持）：`.app` 走 Upload Management API
   分片上传 + v3 `app-package-info` 关联草稿，鉴权与华为同源因此复用其 token 模型
 - 制品抽象从 APK 专用改为按扩展名分派。`.app` 的元信息在 zip 内的 `pack.info`
   （纯 JSON），比 APK 的二进制 AndroidManifest 简单，无需额外依赖
+
+## 为什么删掉了 Kotlin 版
+
+Go 版完成后，仓库里曾同时存在两个实现，Kotlin 版作为参照。**它已删除**，
+原因是维护两个实现让每个 bug 的修复成本翻倍 —— 那段时间的三个渠道修复
+（OPPO 异步任务、vivo 频率限制、荣耀年龄分级）每个都要改两遍。
+
+删除前确认过三件事：
+
+1. **Go 的构建与测试不依赖 Kotlin。** 测试读的是已提交的静态 fixture，
+   不是构建产物。
+2. **真实 API 已成为参照。** 上面那三个修复都是靠真实提交发现的，
+   参照实现的价值随之下降 —— 它最有用的时刻是在真实调用之前。
+3. **黄金向量的生成能力已被替代。** 那是唯一真正会丢失的东西：9 条签名向量
+   原本由 Kotlin 生成。已改为 `scripts/gen-golden-vectors.py`，
+   **并验证过它逐字节复现原有向量**（签名值全部不变）。
+
+用 Python 而不是 Go 来生成，是为了保持独立性：如果生成器和被测实现是同一份
+代码，向量就成了自证。Python 的 `hmac` / `hashlib` 与 Go 的 `crypto` 是两套
+独立实现，对照才有意义。
+
+需要旧实现时可以从 git 历史取出：`git show <删除前的提交>:core/...`。
 
 ## License
 
