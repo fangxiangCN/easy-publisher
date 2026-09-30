@@ -432,10 +432,14 @@ func TestQueryMarketMapsStatus(t *testing.T) {
 		status int
 		want   channel.ReviewState
 	}{
+		// 官方「参数字典介绍」的审核状态取值
 		{1, channel.ReviewDraft},
 		{2, channel.ReviewUnderReview},
 		{3, channel.ReviewOnline},
 		{4, channel.ReviewRejected},
+		// 5 撤销审核：此前未映射，实测两个应用撤回送审后都停在这个值。
+		// 与 4（审核不通过）不同，撤销是开发者自己的操作，提交新版本不会被拒
+		{5, channel.ReviewOffline},
 		{99, channel.ReviewUnknown},
 	}
 	for _, tc := range cases {

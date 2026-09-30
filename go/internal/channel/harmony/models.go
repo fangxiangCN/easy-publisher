@@ -4,12 +4,13 @@ package harmony
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
+	"github.com/fangxiangCN/easy-publisher/go/internal/channel/huawei"
 	"github.com/fangxiangCN/easy-publisher/go/internal/eperr"
 	"github.com/fangxiangCN/easy-publisher/go/internal/jsonx"
-	"strconv"
 )
 
 // ID 是渠道标识。
@@ -365,25 +366,16 @@ type AppInfoRespV3 struct {
 
 // ToMarketInfo 映射为渠道无关的状态。
 //
-// 只有 Android 版的四类「审核不通过」（1 上架、8 升级、13 预审）才归为 Rejected。
-// 9「下架审核不通过」不在此列 —— 它指的是下架申请被拒，与「新版本被拒」是两件事，
-// 归为 Unknown 而不是让人误以为版本被拒。
+// 状态表复用华为 Android 版那份（huawei.AGCReleaseStates）：AGC 的 v3 接口文档
+// 明确写着 state 字段的取值参考 AppInfo 的 releaseState 参数，两个渠道本就是同一
+// 套枚举。共用一张表就不存在「改了 Android 忘了改鸿蒙」这种偏差。
 func (a AppInfoV3) ToMarketInfo(audit *AuditInfoV3) channel.MarketInfo {
 	state := channel.ReviewUnknown
-	raw := ""
+	raw, label := "", ""
 	if a.ReleaseState != nil {
 		raw = strconv.FormatInt(int64(*a.ReleaseState), 10)
-		switch int64(*a.ReleaseState) {
-		case 0:
-			state = channel.ReviewOnline
-		case 1, 8, 13:
-			state = channel.ReviewRejected
-		case 4, 5:
-			state = channel.ReviewUnderReview
-		case 7:
-			state = channel.ReviewDraft
-		case 2, 6, 10:
-			state = channel.ReviewOffline
+		if entry, ok := huawei.AGCReleaseStates[int(*a.ReleaseState)]; ok {
+			state, label = entry.State, entry.Label
 		}
 	}
 
@@ -401,6 +393,7 @@ func (a AppInfoV3) ToMarketInfo(audit *AuditInfoV3) channel.MarketInfo {
 	}
 
 	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.RawStateLabel = label
 	if audit != nil && audit.AuditOpinion != nil {
 		if opinion := strings.TrimSpace(string(*audit.AuditOpinion)); opinion != "" {
 			info.Review = &channel.ReviewFeedback{Opinion: opinion}

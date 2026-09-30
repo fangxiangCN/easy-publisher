@@ -135,11 +135,24 @@ easy-publisher status --app com.example.app --json
 easy-publisher status --app com.example.app --json
 ```
 
-关注三个字段：
-- `reviewState`：`UnderReview` 表示正在审核，提交会被拒绝。
+关注几个字段：
+
+- `reviewState`：六档粗分类 —— `Online`（已上架）/ `UnderReview`（审核中，提交会被拒）/
+  `Rejected`（被拒，需修改后重提）/ `Draft`（草稿）/ `Offline`（不在架上）/
+  `Pending`（审核已过、待发布）/ `Unknown`（渠道返回了文档外的值，需人工核实）。
+- `reviewStateLabel`：上述分类的中文名。
+- `rawStateLabel`：**渠道自己对该状态的说法**（如「撤销上架」「运营打回」）。
+  粗分类只有六档，表达不了渠道特有的细分 —— 华为 13 个取值里有 4 个都归为
+  `Offline`，但「撤销上架」与「强制下架」对用户的含义完全不同。
+  状态列的展示形式是「粗分类（渠道说法）」，两者都看得到。
 - `canSubmit`：false 表示此刻不能提交。
 - `lastVersionCode`：线上版本号。**可能是 null** —— 应用在商店只有未上传 APK 的
   草稿版本时，渠道不返回版本号。这是正常情况，不是错误。
+
+各渠道的完整状态码表已实现（华为/鸿蒙 14 个、OPPO 17 个、vivo 5 个、荣耀 5 个）。
+小米的查询接口只返回布尔 `updateVersion`，**没有状态码**，需要精确状态时只能登录后台。
+
+遇到 `Unknown` 时不要猜它的含义：把 `rawState` 原文交给用户，让他到渠道后台核对。
 
 ### 看已配置的应用和渠道
 

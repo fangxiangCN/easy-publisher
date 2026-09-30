@@ -440,19 +440,24 @@ func TestQueryMarketReleaseStateMapping(t *testing.T) {
 		state int
 		want  channel.ReviewState
 	}{
+		// 官方《查询应用信息》的 AppInfo 表，releaseState 全部 14 个取值
 		{0, channel.ReviewOnline},
+		{1, channel.ReviewRejected}, // 上架审核不通过：首次上架被拒走这个码
+		{2, channel.ReviewOffline},
+		{3, channel.ReviewPending}, // 待上架 / 预约上架
 		{4, channel.ReviewUnderReview},
-		{5, channel.ReviewUnderReview},
+		{5, channel.ReviewUnderReview}, // 升级审核中
+		{6, channel.ReviewOffline},
 		{7, channel.ReviewDraft},
 		{8, channel.ReviewRejected},
-		// 1 是「上架审核不通过」：首次上架被拒走的就是这个码，
-		// 曾因为没映射而显示成「状态未知」（civilian 实测）。
-		{1, channel.ReviewRejected},
-		// 9 是「下架审核不通过」，同属审核给出否定结论。
-		{9, channel.ReviewRejected},
-		{2, channel.ReviewOffline},
-		{6, channel.ReviewOffline},
+		// 9 是「下架审核不通过」：指下架申请被拒，与「你提交的新版本被拒」
+		// 是两件事，归 Unknown 而不是让人误以为版本被拒
+		{9, channel.ReviewUnknown},
 		{10, channel.ReviewOffline},
+		{11, channel.ReviewOffline}, // 撤销上架
+		{12, channel.ReviewUnderReview},
+		{13, channel.ReviewRejected}, // 预审不通过
+		// 表外的值：说明华为新增了状态，不猜
 		{99, channel.ReviewUnknown},
 	}
 	for _, tc := range cases {

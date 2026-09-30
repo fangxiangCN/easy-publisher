@@ -218,14 +218,34 @@ type Channel interface {
 }
 
 // ReviewState 是应用在商店的审核状态。
+//
+// 这是**渠道无关的粗分类**：它的职责是支撑决策（能否提交、是否在审核）与
+// 概览展示，不可能穷尽各渠道的全部状态。渠道文档里的精确状态名由
+// [MarketInfo.RawStateLabel] 承载。
+//
+// 这也是为什么新增值时要放在 ReviewUnknown 之前：枚举的数值不对外暴露
+// （输出走 String()），但保持 Unknown 是最后一个值，能让任何漏掉新分支的
+// switch 落进 default 时仍是「未知」而不是误判成某个具体状态。
 type ReviewState int
 
 const (
+	// ReviewOnline 已上架，用户可下载
 	ReviewOnline ReviewState = iota
+	// ReviewUnderReview 审核流程进行中，此时提交新版本会被拒绝
 	ReviewUnderReview
+	// ReviewRejected 审核未通过，需修改后重新提交
 	ReviewRejected
+	// ReviewDraft 草稿，尚未提交审核
 	ReviewDraft
+	// ReviewOffline 不在架上（含下架、撤销上架、冻结等）
 	ReviewOffline
+	// ReviewPending 审核已通过，等待发布（定时发布、待上架）
+	//
+	// 与 Online 的区别是「用户此刻还下载不到这个版本」，与 Offline 的区别是
+	// 「没有被打回，只差发布这一步」。华为的 releaseState=3（待上架/预约上架）
+	// 与 OPPO 的 audit_status=7（定时发布）都属于这一档。
+	ReviewPending
+	// ReviewUnknown 渠道返回了文档未覆盖的状态值，需人工到后台核对
 	ReviewUnknown
 )
 
@@ -241,6 +261,8 @@ func (r ReviewState) String() string {
 		return "Draft"
 	case ReviewOffline:
 		return "Offline"
+	case ReviewPending:
+		return "Pending"
 	default:
 		return "Unknown"
 	}
@@ -258,6 +280,8 @@ func (r ReviewState) Label() string {
 		return "草稿"
 	case ReviewOffline:
 		return "已下架"
+	case ReviewPending:
+		return "待上架"
 	default:
 		return "状态未知"
 	}
@@ -284,6 +308,12 @@ type MarketInfo struct {
 	CanSubmit bool
 	// RawState 是渠道返回的原始状态值，便于排查新增的状态码
 	RawState string
+	// RawStateLabel 是渠道文档里该状态值的原始描述，如「撤销上架」「运营打回」。
+	//
+	// ReviewState 只有六档粗分类，无法表达渠道特有的状态细分（华为 13 个取值
+	// 里有 5 个都归为「不在架上」）。这里原样透传官方描述，让用户看到的是
+	// 渠道后台里的那个词，而不是我们归纳后的近义词。
+	RawStateLabel string
 	// Review 是渠道给出的审核反馈，渠道未提供时为 nil
 	Review *ReviewFeedback
 }

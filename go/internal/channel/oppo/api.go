@@ -36,8 +36,6 @@ const (
 	pathTaskState = "/resource/v1/app/task-state"
 	successCode   = 0
 	maxRaw        = 2000
-	auditOnline   = 111
-	auditRejected = 444
 	timeLayout    = "2006-01-02 15:04:05"
 	boundary      = "----EasyPublisherOppoBoundary"
 	formFileField = "file"
@@ -78,16 +76,33 @@ type tokenResponse struct {
 
 // AppInfo 是应用信息。字段名保持与接口一致的 snake_case 映射，便于和 OPPO 文档对照。
 type AppInfo struct {
-	Summary        string           `json:"summary"`
-	DetailDesc     string           `json:"detail_desc"`
-	VersionCode    *jsonx.FlexInt64 `json:"version_code"`
-	VersionName    string           `json:"version_name"`
-	AuditStatus    *jsonx.FlexInt64 `json:"audit_status"`
-	PrivacyURL     string           `json:"privacy_source_url"`
-	SecondCategory string           `json:"ver_second_category_id"`
-	ThirdCategory  string           `json:"ver_third_category_id"`
-	IconURL        string           `json:"icon_url"`
-	PicURL         string           `json:"pic_url"`
+	Summary     string           `json:"summary"`
+	DetailDesc  string           `json:"detail_desc"`
+	VersionCode *jsonx.FlexInt64 `json:"version_code"`
+	VersionName string           `json:"version_name"`
+
+	// AuditStatus 是审核状态。**官方文档把它标为 string，实测也确实是字符串**
+	// （如 "111"、"444"），因此这里用 FlexString 而不是 FlexInt64。
+	//
+	// 用整数会踩到一个真实的冲突：官方对照表里既有 0（未发布）也有 00（资质审核中），
+	// 两者解析成整数都是 0，而它们的含义完全不同。字符串比较没有这个问题。
+	AuditStatus *jsonx.FlexString `json:"audit_status"`
+	// AuditStatusName 是审核状态的中文描述，实测随 audit_status 一起返回
+	// （如 "上线"、"审核不通过"）。有它就不必自己维护一份标签映射 ——
+	// 直接用渠道自己的措辞，用户在后台看到的词与这里完全一致。
+	AuditStatusName string `json:"audit_status_name"`
+	// OldAuditStatus 是上一次的审核状态，同为字符串。当前状态已回落到正常值、
+	// 而旧状态是被拒时，它是「刚被拒过」的线索。
+	OldAuditStatus *jsonx.FlexString `json:"old_audit_status"`
+	// UpdateInfoCheck 是「更新资料」的审核状态：1-审核中，0-不在审核中。
+	// 与 AuditStatus 是两条独立的审核线（改版本 vs 改素材）。
+	UpdateInfoCheck *jsonx.FlexInt64 `json:"update_info_check"`
+
+	PrivacyURL     string `json:"privacy_source_url"`
+	SecondCategory string `json:"ver_second_category_id"`
+	ThirdCategory  string `json:"ver_third_category_id"`
+	IconURL        string `json:"icon_url"`
+	PicURL         string `json:"pic_url"`
 	// 以下三个是发布版本接口的「必传」字段（见 OPPO 文档 id=10999 的更新说明）。
 	// 漏传时 app/upd 会返回 errno=0 并把任务排入队列，但异步任务随后静默失败 ——
 	// 表现为「提交成功」而线上毫无变化，只有查 task-state 才能发现。
@@ -125,6 +140,34 @@ type OppoRefuseItem struct {
 	Advice string `json:"advice"`
 }
 
+// oppoAuditStates 是官方《审核状态对照表》（文档 id=11176）里的全部取值。
+//
+// 键是字符串而非整数：官方表里 0（未发布）与 00（资质审核中）是两个不同取值，
+// 用整数会把它们并成同一个键。文档明确标注 audit_status 的类型是 string。
+//
+// 描述一栏照抄文档原文，仅在渠道没返回 audit_status_name 时兜底。
+var oppoAuditStates = map[string]struct {
+	State channel.ReviewState
+	Label string
+}{
+	"0":   {channel.ReviewDraft, "未发布"},
+	"1":   {channel.ReviewUnderReview, "审核中"},
+	"2":   {channel.ReviewPending, "审核通过"},
+	"3":   {channel.ReviewRejected, "测试不通过"},
+	"4":   {channel.ReviewUnderReview, "运营审核中"},
+	"5":   {channel.ReviewRejected, "运营打回"},
+	"6":   {channel.ReviewPending, "运营通过"},
+	"7":   {channel.ReviewPending, "定时发布"},
+	"00":  {channel.ReviewUnderReview, "资质审核中"},
+	"11":  {channel.ReviewUnderReview, "资质审核通过"},
+	"-11": {channel.ReviewRejected, "资质审核不通过"},
+	"-22": {channel.ReviewPending, "报备提交成功"},
+	"22":  {channel.ReviewOffline, "已冻结"},
+	"111": {channel.ReviewOnline, "上线"},
+	"222": {channel.ReviewOffline, "下线"},
+	"444": {channel.ReviewRejected, "审核不通过"},
+}
+
 // ToMarketInfo 转成渠道无关的状态。
 //
 // # 为什么未知状态码归为 Unknown 而不是「审核中」
@@ -134,28 +177,25 @@ type OppoRefuseItem struct {
 // 于是当 OPPO 返回一个我们不认识的状态码时，用户看到的是
 // 「渠道正在审核中，不能提交新版本」—— 但真实情况可能是被拒了、应该重新提交。
 //
-// OPPO 的审核状态取值远不止已上架（111）与被拒（444）两种。第三方文档镜像里
-// 提到还有测试不通过、运营打回、资质审核不通过等取值，但那是 2022 年的第三方
-// 来源，已无法从官方文档核实（OPPO 开放平台文档需登录）。
-//
-// 因此这里**不猜**：不认识的码就是 Unknown，并保留 RawState 让用户能拿着原始值
-// 去后台核对。Unknown 不阻断提交，让渠道自己拒绝比我们替它下结论准确。
+// 现在按官方对照表（id=11176）补全全部 17 个取值，见 oppoAuditStates。
+// 仍未收录的值是 Unknown，原始值留在 RawState 里供人核对 ——
+// 那说明 OPPO 新增了状态，而不是我们该去猜。
 //
 // audit_status 缺失同样归为 Unknown —— 接口没返回状态和商店确实在审核是两件事，
 // 混在一起会让排查走错方向。上游在这里会 NPE。
 func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
-	raw := ""
+	raw, label := "", ""
 	if a.AuditStatus != nil {
-		raw = strconv.FormatInt(int64(*a.AuditStatus), 10)
-		switch int64(*a.AuditStatus) {
-		case auditOnline:
-			state = channel.ReviewOnline
-		case auditRejected:
-			state = channel.ReviewRejected
-		default:
-			state = channel.ReviewUnknown
+		raw = string(*a.AuditStatus)
+		if entry, ok := oppoAuditStates[raw]; ok {
+			state, label = entry.State, entry.Label
 		}
+	}
+	// 渠道自己给的中文描述优先于我们的映射表：它是权威措辞，
+	// 且 OPPO 新增状态时这里会自动跟上，不必等我们补表
+	if name := strings.TrimSpace(a.AuditStatusName); name != "" {
+		label = name
 	}
 	var version *channel.Version
 	if a.VersionCode != nil && strings.TrimSpace(a.VersionName) != "" {
@@ -163,6 +203,7 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	}
 
 	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.RawStateLabel = label
 	info.Review = a.reviewFeedback()
 	return info
 }

@@ -106,7 +106,7 @@ func TestUploadFullFlowRequestShapes(t *testing.T) {
 	srv, fake := newFakeOppo(t, map[string]string{
 		pathToken: `{"errno":0,"data":{"access_token":"tok-abc"}}`,
 		pathAppInfo: `{"errno":0,"data":{"summary":"一句话","detail_desc":"详细",` +
-			`"version_code":"1000","version_name":"1.0.0","audit_status":111,` +
+			`"version_code":"1000","version_name":"1.0.0","audit_status":"111","audit_status_name":"上线",` +
 			`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 			`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 			`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +
@@ -440,30 +440,38 @@ func TestRejectsUnsupportedStage(t *testing.T) {
 }
 
 func TestQueryMarketMapsAuditStatus(t *testing.T) {
+	// 官方《审核状态对照表》（文档 id=11176）的全部取值。
+	// 键是字符串：表里 0（未发布）与 00（资质审核中）是不同取值，
+	// 按整数解析会撞成同一个键 —— 这也是字段类型必须是字符串的原因。
 	cases := []struct {
-		status int
+		status string
 		want   channel.ReviewState
 	}{
-		{auditOnline, channel.ReviewOnline},
-		{auditRejected, channel.ReviewRejected},
-		// 未知状态码归为 Unknown，**不是** UnderReview。
-		//
-		// 这曾经是 UnderReview，后果不只是显示错：canSubmit 由「是否审核中」推导，
-		// 而 PublishPolicy 会因此拒绝提交 —— 用户会看到「渠道正在审核中，不能提交
-		// 新版本」，而真实情况可能是被拒了、应该重新提交。
-		//
-		// OPPO 的审核状态取值远不止这两个（第三方文档镜像提到还有测试不通过、
-		// 运营打回、资质审核不通过等），但那些来源已无法从官方核实。
-		// 不认识就不猜：Unknown 且不阻断提交，让渠道自己拒绝比我们替它下结论准确。
-		{1, channel.ReviewUnknown},
-		{99, channel.ReviewUnknown},
+		{"0", channel.ReviewDraft},
+		{"1", channel.ReviewUnderReview},
+		{"2", channel.ReviewPending},
+		{"3", channel.ReviewRejected},
+		{"4", channel.ReviewUnderReview},
+		{"5", channel.ReviewRejected},
+		{"6", channel.ReviewPending},
+		{"7", channel.ReviewPending},
+		{"00", channel.ReviewUnderReview},
+		{"11", channel.ReviewUnderReview},
+		{"-11", channel.ReviewRejected},
+		{"-22", channel.ReviewPending},
+		{"22", channel.ReviewOffline},
+		{"111", channel.ReviewOnline},
+		{"222", channel.ReviewOffline},
+		{"444", channel.ReviewRejected},
+		// 表里的 x（其他），以及一个表外的值：都不认识，归 Unknown
+		{"99", channel.ReviewUnknown},
 	}
 	for _, tc := range cases {
-		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+		t.Run(tc.status, func(t *testing.T) {
 			srv, _ := newFakeOppo(t, map[string]string{
 				pathToken: `{"errno":0,"data":{"access_token":"tok"}}`,
 				pathAppInfo: strings.Replace(appInfoResponse(),
-					`"audit_status":111`, fmt.Sprintf(`"audit_status":%d`, tc.status), 1),
+					`"audit_status":"111"`, fmt.Sprintf(`"audit_status":%q`, tc.status), 1),
 			})
 			info, err := newTestChannel(srv).QueryMarket(context.Background(), channel.MarketQuery{
 				ApplicationID: "com.example.app",
@@ -476,13 +484,59 @@ func TestQueryMarketMapsAuditStatus(t *testing.T) {
 				t.Fatal(err)
 			}
 			if info.ReviewState != tc.want {
-				t.Errorf("audit_status=%d 映射为 %v, 期望 %v", tc.status, info.ReviewState, tc.want)
+				t.Errorf("audit_status=%s 映射为 %v, 期望 %v", tc.status, info.ReviewState, tc.want)
 			}
 			// 未知状态不该阻断提交：真正的拒绝理由由渠道给出，比我们猜准
 			if tc.want == channel.ReviewUnknown && !info.CanSubmit {
-				t.Errorf("audit_status=%d 是未知状态，不应阻断提交", tc.status)
+				t.Errorf("audit_status=%s 是未知状态，不应阻断提交", tc.status)
 			}
 		})
+	}
+}
+
+// 字符串 "00" 不能被当成整数 0 处理 —— 两者的官方含义不同
+// （"00" 是资质审核中，"0" 是未发布）。用整数解析会让前者落进后者的分支。
+func TestAuditStatusZeroZeroIsNotZero(t *testing.T) {
+	srv, _ := newFakeOppo(t, map[string]string{
+		pathToken: `{"errno":0,"data":{"access_token":"tok"}}`,
+		pathAppInfo: strings.Replace(appInfoResponse(),
+			`"audit_status":"111"`, `"audit_status":"00"`, 1),
+	})
+	info, err := newTestChannel(srv).QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ReviewState == channel.ReviewDraft {
+		t.Errorf(`audit_status="00"（资质审核中）被误判成草稿 —— ` +
+			`说明它被按整数 0 解析了`)
+	}
+	if info.ReviewState != channel.ReviewUnderReview {
+		t.Errorf(`audit_status="00" 应为审核中，实际 %v`, info.ReviewState)
+	}
+}
+
+// 渠道给的中文描述优先于本地映射表：OPPO 新增状态时会自动跟上，
+// 且用户看到的措辞与后台一致。
+func TestAuditStatusNameFromChannelWins(t *testing.T) {
+	srv, _ := newFakeOppo(t, map[string]string{
+		pathToken: `{"errno":0,"data":{"access_token":"tok"}}`,
+		pathAppInfo: strings.Replace(appInfoResponse(),
+			`"audit_status_name":"上线"`, `"audit_status_name":"渠道自述状态"`, 1),
+	})
+	info, err := newTestChannel(srv).QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials:   channel.NewCredentials(map[string]string{ParamClientID: "k", ParamClientSecret: "s"}),
+		Timeouts:      httpx.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RawStateLabel != "渠道自述状态" {
+		t.Errorf("RawStateLabel = %q，应优先采用渠道返回的 audit_status_name", info.RawStateLabel)
 	}
 }
 
@@ -490,8 +544,9 @@ func TestAuditStatusMissingIsUnknownNotUnderReview(t *testing.T) {
 	// 接口没返回状态和商店确实在审核是两件事，混在一起会让排查走错方向。
 	// 上游在这里会 NPE
 	srv, _ := newFakeOppo(t, map[string]string{
-		pathToken:   `{"errno":0,"data":{"access_token":"tok"}}`,
-		pathAppInfo: strings.Replace(appInfoResponse(), `"audit_status":111,`, "", 1),
+		pathToken: `{"errno":0,"data":{"access_token":"tok"}}`,
+		pathAppInfo: strings.Replace(appInfoResponse(),
+			`"audit_status":"111","audit_status_name":"上线",`, "", 1),
 	})
 	info, err := newTestChannel(srv).QueryMarket(context.Background(), channel.MarketQuery{
 		ApplicationID: "com.example.app",
@@ -585,7 +640,7 @@ func testRequest(t *testing.T, path string) channel.UploadRequest {
 
 func appInfoResponse() string {
 	return `{"errno":0,"data":{"summary":"一句话","detail_desc":"详细",` +
-		`"version_code":"1000","version_name":"1.0.0","audit_status":111,` +
+		`"version_code":"1000","version_name":"1.0.0","audit_status":"111","audit_status_name":"上线",` +
 		`"privacy_source_url":"https://p.example.com","ver_second_category_id":"2",` +
 		`"ver_third_category_id":"30","icon_url":"https://i.png","pic_url":"https://p.png",` +
 		`"test_desc":"","business_username":"","business_email":"","business_mobile":"",` +

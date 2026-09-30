@@ -620,8 +620,11 @@ func TestQueryMarketMapsAuditResult(t *testing.T) {
 		{0, channel.ReviewUnderReview},
 		{1, channel.ReviewOnline},
 		{2, channel.ReviewRejected},
-		// 3 是「其他非审核状态」，荣耀文档未细分，归为未知而不是猜成下架
-		{3, channel.ReviewUnknown},
+		// 3 是「其他非审核状态」，官方未细分。归 Offline 而不是 Unknown：
+		// 未知会让 checklist 标成「要求人工核实」，而 3 已经确定不是审核中、
+		// 不是已上架、也不是被拒 —— 提交新版本不会因此被挡。
+		// 精确状态（下架/撤销/冻结）由 RawStateLabel 透传官方原文。
+		{3, channel.ReviewOffline},
 		{4, channel.ReviewDraft},
 		{99, channel.ReviewUnknown},
 	}

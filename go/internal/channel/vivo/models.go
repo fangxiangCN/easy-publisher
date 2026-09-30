@@ -204,27 +204,34 @@ type appInfo struct {
 	UnPassReason *jsonx.FlexString `json:"unPassReason"`
 }
 
+// vivoReviewStates 是官方「参数字典介绍」里审核状态的取值。
+//
+// 5（撤销审核）此前未映射，实测两个应用都是这个值 —— 用户在后台撤回送审后，
+// 状态就停在这里。它与 4（审核不通过）的区别很关键：撤销是开发者自己的操作，
+// 提交新版本不会被拒；4 才是需要先修问题。
+var vivoReviewStates = map[int]struct {
+	State channel.ReviewState
+	Label string
+}{
+	1: {channel.ReviewDraft, "草稿"},
+	2: {channel.ReviewUnderReview, "待审核"},
+	3: {channel.ReviewOnline, "审核通过"},
+	4: {channel.ReviewRejected, "审核不通过"},
+	5: {channel.ReviewOffline, "撤销审核"},
+}
+
 // ToMarketInfo 转成渠道无关的状态。
 //
 // 版本信息缺失时 LastVersion 传 nil 而不是塞占位值：商店里只有尚未上传 APK 的
 // 草稿时 vivo 不返回版本号，上游把 lastVersion 声明为非空，这种情况直接崩在解析阶段。
 func (a appInfo) ToMarketInfo() channel.MarketInfo {
-	var state channel.ReviewState
+	state := channel.ReviewUnknown
+	raw, label := "", ""
 	if a.ReviewStatus != nil {
-		switch *a.ReviewStatus {
-		case 1:
-			state = channel.ReviewDraft
-		case 2:
-			state = channel.ReviewUnderReview
-		case 3:
-			state = channel.ReviewOnline
-		case 4:
-			state = channel.ReviewRejected
-		default:
-			state = channel.ReviewUnknown
+		raw = strconv.Itoa(*a.ReviewStatus)
+		if entry, ok := vivoReviewStates[*a.ReviewStatus]; ok {
+			state, label = entry.State, entry.Label
 		}
-	} else {
-		state = channel.ReviewUnknown
 	}
 
 	var version *channel.Version
@@ -232,12 +239,8 @@ func (a appInfo) ToMarketInfo() channel.MarketInfo {
 		version = &channel.Version{Code: int64(*a.VersionCode), Name: a.VersionName}
 	}
 
-	raw := ""
-	if a.ReviewStatus != nil {
-		raw = strconv.Itoa(*a.ReviewStatus)
-	}
-
 	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.RawStateLabel = label
 	// 审核不通过原因。vivo 只给一段文字，没有附件 ——
 	// 举证截图与机型 log 只在网页后台的「审核报告」里
 	if reason := strings.TrimSpace(string(derefFlex(a.UnPassReason))); reason != "" {

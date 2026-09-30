@@ -340,13 +340,40 @@ type recorded struct {
 type fakeMi struct {
 	mu        sync.Mutex
 	responses map[string]string
-	requests  []recorded
+	// sequences 按调用次序返回响应：key 是路径，value 是依次取用的响应列表。
+	// 用完之后回落到 responses。用于测试「先失败、重试后成功」这类有状态的场景 ——
+	// 固定响应无法表达「第 N 次调用返回什么」。
+	sequences map[string][]string
+	// seqIndex 记录每个路径已经取到第几个序列响应
+	seqIndex map[string]int
+	requests []recorded
 }
 
 func (f *fakeMi) set(path, resp string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responses[path] = resp
+}
+
+// setSequence 让该路径依次返回给定的响应，用于测重试。
+func (f *fakeMi) setSequence(path string, resps ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sequences[path] = resps
+	f.seqIndex[path] = 0
+}
+
+// countPath 返回该路径被请求的次数。
+func (f *fakeMi) countPath(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, r := range f.requests {
+		if r.Path == path {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeMi) all() []recorded {
@@ -386,7 +413,11 @@ var miDefaults = map[string]string{
 func newFakeMi(t *testing.T) (*Channel, *fakeMi, string, *rsa.PrivateKey) {
 	t.Helper()
 	certPEM, key := testCert(t)
-	fake := &fakeMi{responses: map[string]string{}}
+	fake := &fakeMi{
+		responses: map[string]string{},
+		sequences: map[string][]string{},
+		seqIndex:  map[string]int{},
+	}
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -424,7 +455,19 @@ func newFakeMi(t *testing.T) (*Channel, *fakeMi, string, *rsa.PrivateKey) {
 
 		fake.mu.Lock()
 		fake.requests = append(fake.requests, rec)
-		resp, ok := fake.responses[r.URL.Path]
+		var resp string
+		var ok bool
+		if seq, has := fake.sequences[r.URL.Path]; has {
+			idx := fake.seqIndex[r.URL.Path]
+			if idx < len(seq) {
+				resp = seq[idx]
+				fake.seqIndex[r.URL.Path] = idx + 1
+				ok = true
+			}
+		}
+		if !ok {
+			resp, ok = fake.responses[r.URL.Path]
+		}
 		fake.mu.Unlock()
 		if !ok {
 			resp, ok = miDefaults[r.URL.Path]
@@ -895,4 +938,88 @@ func urlDecode(s string) string {
 		return s
 	}
 	return out
+}
+
+// ---- 查询频率限制 ----
+
+// 限流后应自动重试并成功，而不是把整个查询判为失败。
+//
+// 实测：连续两次全渠道查询（间隔数秒）即触发 code=-20035，
+// 静默几秒自动恢复。发布流程本身就会连续查询，必然撞上。
+func TestQueryMarketRetriesOnRateLimit(t *testing.T) {
+	ch, fake, cert, _ := newFakeMi(t)
+	// 首次限流，第二次成功
+	fake.setSequence(PathQuery,
+		`{"result":-20035,"message":"请求频率太快"}`,
+		miDefaults[PathQuery],
+	)
+
+	oldAttempts, oldInterval := miRetryAttempts, miRetryInterval
+	miRetryAttempts, miRetryInterval = 3, time.Millisecond
+	t.Cleanup(func() { miRetryAttempts, miRetryInterval = oldAttempts, oldInterval })
+
+	info, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccount: "test@example.com", ParamPublicKey: cert, ParamPrivateKey: "p",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err != nil {
+		t.Fatalf("限流后应重试并成功，实际失败：%v", err)
+	}
+	if info.ReviewState != channel.ReviewOnline {
+		t.Errorf("状态 = %v, 期望已上架", info.ReviewState)
+	}
+	if n := fake.countPath(PathQuery); n != 2 {
+		t.Errorf("查询了 %d 次，期望 2 次（首次限流 + 一次重试）", n)
+	}
+}
+
+// 重试次数用尽后要把限流错误如实报出去，而不是静默返回一个空状态。
+func TestQueryMarketGivesUpAfterMaxRetries(t *testing.T) {
+	ch, fake, cert, _ := newFakeMi(t)
+	fake.set(PathQuery, `{"result":-20035,"message":"请求频率太快"}`)
+
+	oldAttempts, oldInterval := miRetryAttempts, miRetryInterval
+	miRetryAttempts, miRetryInterval = 2, time.Millisecond
+	t.Cleanup(func() { miRetryAttempts, miRetryInterval = oldAttempts, oldInterval })
+
+	_, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccount: "test@example.com", ParamPublicKey: cert, ParamPrivateKey: "p",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err == nil {
+		t.Fatal("重试用尽后应返回错误")
+	}
+	if n := fake.countPath(PathQuery); n != 2 {
+		t.Errorf("查询了 %d 次，期望 2 次", n)
+	}
+}
+
+// 非限流的业务错误不该重试 —— 重试改变不了结果，只浪费时间。
+func TestQueryMarketDoesNotRetryOtherErrors(t *testing.T) {
+	ch, fake, cert, _ := newFakeMi(t)
+	fake.set(PathQuery, `{"result":-10001,"message":"签名错误"}`)
+
+	oldAttempts, oldInterval := miRetryAttempts, miRetryInterval
+	miRetryAttempts, miRetryInterval = 5, time.Millisecond
+	t.Cleanup(func() { miRetryAttempts, miRetryInterval = oldAttempts, oldInterval })
+
+	_, err := ch.QueryMarket(context.Background(), channel.MarketQuery{
+		ApplicationID: "com.example.app",
+		Credentials: channel.NewCredentials(map[string]string{
+			ParamAccount: "test@example.com", ParamPublicKey: cert, ParamPrivateKey: "p",
+		}),
+		Timeouts: httpx.Default(),
+	})
+	if err == nil {
+		t.Fatal("业务错误应返回错误")
+	}
+	if n := fake.countPath(PathQuery); n != 1 {
+		t.Errorf("查询了 %d 次，非限流错误不该重试（期望 1 次）", n)
+	}
 }

@@ -220,42 +220,64 @@ func (a *AuditInfo) toReviewFeedback() *channel.ReviewFeedback {
 	return feedback
 }
 
+// AGCReleaseStates 是官方文档里 releaseState 的全部取值。
+//
+// 来源：AGC《查询应用信息 - Android - Publishing API》的 AppInfo 表，
+// 该表注明「releaseType 为 1 时，状态含义如下」（我们发布的都是 releaseType=1
+// 的商用版本）。
+//
+// 导出是因为**鸿蒙走的是同一套枚举** —— AGC 的 v3 接口文档明确写着「state 字段
+// 的取值请参考 AppInfo 中的 releaseState 参数」。两个渠道共用一张表，就不存在
+// 「改了 Android 忘了改鸿蒙」这种偏差。
+//
+// 描述一栏照抄文档，不含我们自己的归纳 —— 它会被原样展示给用户，
+// 好处是用户在 AGC 后台看到的词与我们报出来的完全一致，不必做二次翻译。
+var AGCReleaseStates = map[int]struct {
+	State channel.ReviewState
+	Label string
+}{
+	0:  {channel.ReviewOnline, "已上架"},
+	1:  {channel.ReviewRejected, "上架审核不通过"},
+	2:  {channel.ReviewOffline, "已下架（含强制下架）"},
+	3:  {channel.ReviewPending, "待上架，预约上架"},
+	4:  {channel.ReviewUnderReview, "审核中"},
+	5:  {channel.ReviewUnderReview, "升级审核中"},
+	6:  {channel.ReviewOffline, "申请下架"},
+	7:  {channel.ReviewDraft, "草稿"},
+	8:  {channel.ReviewRejected, "升级审核不通过"},
+	9:  {channel.ReviewUnknown, "下架审核不通过"},
+	10: {channel.ReviewOffline, "应用被开发者下架"},
+	11: {channel.ReviewOffline, "撤销上架"},
+	12: {channel.ReviewUnderReview, "预审中"},
+	13: {channel.ReviewRejected, "预审不通过"},
+}
+
 // ToMarketInfo 映射到渠道无关的状态。
 //
-// 与原实现的两处差异：
-//   - 补齐草稿态（7）与下架态（2/6/10）。原实现只认 0/4/5/8，
-//     草稿应用一律显示「状态未知」，用户无从判断能不能提交。
-//   - 版本信息缺失时 LastVersion 传 nil 而不是伪造一个版本号，也不抛异常。
+// 早期实现只认 0/4/5/8，其余一律「状态未知」，用户无从判断能不能提交。
+// 现在按官方文档补全全部 13 个取值（见 huaweiReleaseStates），未收录的值
+// 仍是 Unknown —— 那说明华为新增了状态码，此时原始值会留在 RawState 里，
+// 拿去后台核对即可。
 //
-// # 为什么 1 与 9 也归为 Rejected
-//
-// 1 是「上架审核不通过」、9 是「下架审核不通过」，两者都是审核明确给出否定
-// 结论、且带审核意见的状态。早期只映射了 8（升级审核不通过），导致首次上架
-// 被拒的应用显示成「状态未知」—— 用户看到未知状态时无法判断是被拒了还是接口
-// 变了，只能去后台翻。实测：civilian 首次上架被拒时 releaseState=1，
-// auditOpinion 同时有值，即是有意见可读的拒审态。
-//
-// 3（待上架）与 11（撤销上架）仍归 Unknown：两者的语义分别是「已过审待发布」
-// 与「开发者主动撤回」，都不属于拒审，但也不对应本包已有的状态取值。
-// 不猜，保留 RawState 让用户拿原始值去后台核对。
+// 几处取值归类的依据：
+//   - 1（上架）、8（升级）、13（预审）都是「你提交的版本被拒」，需要修改后
+//     重提，统一归 Rejected。9（下架审核不通过）不在其中 —— 它指下架申请被拒，
+//     与「新版本被拒」是两件事，我们的桶里没有对应位置，归 Unknown 并保留官方
+//     描述，由人判断。
+//   - 2/6/10/11 都是「用户此刻下载不到」，统一归 Offline，精确差异由
+//     RawStateLabel 表达（「撤销上架」与「强制下架」对用户的含义并不相同）。
+//   - 3 是审核已通过、只差发布这一步，既不是 Online（用户还下不到）也不是
+//     Offline（没有被打回），单列为 Pending。
+//   - 12（预审中）仍在审核流程内，对「能否提交新版本」的影响与 4/5 相同。
 //
 // ToMarketInfo 映射到渠道无关的状态，含审核意见。
 func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
-	raw := ""
+	raw, label := "", ""
 	if a.ReleaseState != nil {
 		raw = fmt.Sprint(*a.ReleaseState)
-		switch *a.ReleaseState {
-		case 0:
-			state = channel.ReviewOnline
-		case 4, 5:
-			state = channel.ReviewUnderReview
-		case 1, 8, 9:
-			state = channel.ReviewRejected
-		case 7:
-			state = channel.ReviewDraft
-		case 2, 6, 10:
-			state = channel.ReviewOffline
+		if entry, ok := AGCReleaseStates[*a.ReleaseState]; ok {
+			state, label = entry.State, entry.Label
 		}
 	}
 
@@ -264,6 +286,7 @@ func (a AppInfo) ToMarketInfo() channel.MarketInfo {
 		version = &channel.Version{Code: *a.VersionCode, Name: a.VersionNumber}
 	}
 	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.RawStateLabel = label
 	info.Review = a.audit.toReviewFeedback()
 	return info
 }

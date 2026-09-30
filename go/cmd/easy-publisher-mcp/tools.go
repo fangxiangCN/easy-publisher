@@ -201,6 +201,7 @@ type marketStateItem struct {
 	OK               bool   `json:"ok"`
 	ReviewState      string `json:"reviewState,omitempty"`
 	ReviewStateLabel string `json:"reviewStateLabel,omitempty"`
+	RawStateLabel    string `json:"rawStateLabel,omitempty"`
 	CanSubmit        *bool  `json:"canSubmit,omitempty"`
 	LastVersionCode  *int64 `json:"lastVersionCode,omitempty"`
 	LastVersionName  string `json:"lastVersionName,omitempty"`
@@ -273,6 +274,7 @@ func registerGetMarketState(server *mcp.Server, svc *publish.Service) {
 					item.LastVersionName = v.Name
 				}
 				item.RawState = res.Info.RawState
+				item.RawStateLabel = res.Info.RawStateLabel
 			}
 			// 审核意见：各渠道都只有自由文本，没有结构化原因码 ——
 			// 原样带出去，让调用方自己读，我们不做分类或归纳
@@ -391,6 +393,9 @@ type checkReleaseItem struct {
 	ID               string `json:"id"`
 	CanRelease       bool   `json:"canRelease"`
 	ReviewStateLabel string `json:"reviewStateLabel,omitempty"`
+	// RawStateLabel 是渠道文档里该状态值的原始描述（如「撤销上架」）。
+	// ReviewStateLabel 是粗分类，这个是渠道自己的措辞
+	RawStateLabel    string `json:"rawStateLabel,omitempty"`
 	LastVersionCode  *int64 `json:"lastVersionCode,omitempty"`
 	BlockedReason    string `json:"blockedReason,omitempty"`
 	StateQueryFailed string `json:"stateQueryFailed,omitempty"`
@@ -511,6 +516,7 @@ func registerCheckRelease(server *mcp.Server, svc *publish.Service) {
 			if res.Err == nil {
 				market = &res.Info
 				item.ReviewStateLabel = res.Info.ReviewState.Label()
+				item.RawStateLabel = res.Info.RawStateLabel
 				if v := res.Info.LastVersion; v != nil {
 					code := v.Code
 					item.LastVersionCode = &code

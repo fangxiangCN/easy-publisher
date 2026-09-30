@@ -234,24 +234,30 @@ type ReviewState struct {
 //
 // 版本信息缺失时 LastVersion 传 nil 而不是伪造 0 —— 商店里只有草稿版本时荣耀
 // 不返回版本号，上层「线上版本」展示与版本号比较都需要能区分「没有」和「是 0」。
+// honorAuditResults 是官方文档里 auditResult 的取值。
+//
+// 与华为、OPPO 不同，荣耀这套编码是**粗粒度**的：3 只写「其他非审核状态」，
+// 不细分是下架、撤销还是冻结。这是渠道 API 本身的限制，不是我们没查全 ——
+// 因此 3 只能归 Offline（判定的依据是「它既不是审核中、也不是已上架、也不是被拒」），
+// 同时把官方原文放进 RawStateLabel，需要精确状态时到后台核对。
+var honorAuditResults = map[int]struct {
+	State channel.ReviewState
+	Label string
+}{
+	0: {channel.ReviewUnderReview, "审核中"},
+	1: {channel.ReviewOnline, "审核通过"},
+	2: {channel.ReviewRejected, "审核不通过"},
+	3: {channel.ReviewOffline, "其他非审核状态"},
+	4: {channel.ReviewDraft, "编辑中未提审"},
+}
+
 func (r ReviewState) ToMarketInfo() channel.MarketInfo {
 	state := channel.ReviewUnknown
-	raw := "auditResult=null"
+	raw, label := "auditResult=null", ""
 	if r.AuditResult != nil {
 		raw = fmt.Sprintf("auditResult=%d", *r.AuditResult)
-		switch *r.AuditResult {
-		case 0:
-			state = channel.ReviewUnderReview
-		case 1:
-			state = channel.ReviewOnline
-		case 2:
-			state = channel.ReviewRejected
-		case 3:
-			// 3 是「其他非审核状态」，荣耀文档未细分，无法判断是下架还是别的，
-			// 归为未知而不是猜成 Offline
-			state = channel.ReviewUnknown
-		case 4:
-			state = channel.ReviewDraft
+		if entry, ok := honorAuditResults[*r.AuditResult]; ok {
+			state, label = entry.State, entry.Label
 		}
 	}
 
@@ -261,6 +267,7 @@ func (r ReviewState) ToMarketInfo() channel.MarketInfo {
 	}
 
 	info := channel.NewMarketInfo(ID, state, version, raw)
+	info.RawStateLabel = label
 	feedback := &channel.ReviewFeedback{}
 	if r.AuditMessage != nil {
 		feedback.Opinion = strings.TrimSpace(string(*r.AuditMessage))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/artifact"
 	"github.com/fangxiangCN/easy-publisher/go/internal/channel"
@@ -71,6 +72,9 @@ func newStatusCmd() *cobra.Command {
 					LastVersionCode  *int64  `json:"lastVersionCode"`
 					LastVersionName  *string `json:"lastVersionName"`
 					RawState         *string `json:"rawState"`
+					// RawStateLabel 是渠道文档里该状态值的原始描述（如「撤销上架」）。
+					// ReviewStateLabel 是粗分类，这个是渠道自己的措辞
+					RawStateLabel *string `json:"rawStateLabel"`
 					// RejectReason 是渠道给出的审核意见原文
 					RejectReason *string `json:"rejectReason"`
 					// RejectAttachments 是审核意见附件的 URL（审核员截图等）
@@ -116,6 +120,10 @@ func newStatusCmd() *cobra.Command {
 							raw := res.Info.RawState
 							item.RawState = &raw
 						}
+						if res.Info.RawStateLabel != "" {
+							lbl := res.Info.RawStateLabel
+							item.RawStateLabel = &lbl
+						}
 						if r := res.Info.Review; r != nil {
 							if r.Opinion != "" {
 								opinion := r.Opinion
@@ -153,7 +161,7 @@ func newStatusCmd() *cobra.Command {
 					if res.Info.CanSubmit {
 						canSubmit = "是"
 					}
-					rows = append(rows, []string{id, res.Info.ReviewState.Label(), version, canSubmit})
+					rows = append(rows, []string{id, stateLabelOf(res.Info), version, canSubmit})
 				}
 				output.Table([]string{"渠道", "审核状态", "线上版本", "可提交"}, rows)
 
@@ -188,6 +196,21 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "输出 JSON")
 	_ = cmd.MarkFlagRequired("app")
 	return cmd
+}
+
+// stateLabelOf 拼出展示用的状态文案。
+//
+// 粗分类与渠道原始描述**都**要出现：前者支撑「能不能提交」的判断，后者是渠道
+// 后台里的那个词。只给粗分类会丢掉渠道特有的细分（华为 13 个取值里有 5 个都
+// 归为「已下架」），只给原始描述则用户得自己判断它能不能提交。
+// 两者相同时不重复显示。
+func stateLabelOf(info channel.MarketInfo) string {
+	label := info.ReviewState.Label()
+	raw := strings.TrimSpace(info.RawStateLabel)
+	if raw == "" || raw == label {
+		return label
+	}
+	return label + "（" + raw + "）"
 }
 
 // silentError 表示「错误已经输出过了，只需要按这个退出码退出」。
