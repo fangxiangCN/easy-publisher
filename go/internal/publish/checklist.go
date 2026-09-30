@@ -129,17 +129,13 @@ func (s *Service) Checklist(
 	}
 
 	result := ChecklistResult{ApplicationID: cfg.ApplicationID, Artifact: info}
-	result.Checks = append(result.Checks, ArtifactChecks(cfg, info, opts.ExpectLabel)...)
+	result.Checks = append(result.Checks, artifactChecks(cfg, info, opts.ExpectLabel)...)
 	result.Checks = append(result.Checks, s.channelChecks(ctx, cfg, opts, info)...)
 	return result, nil
 }
 
-// ArtifactChecks 是制品本身与配置的一致性检查（不联网）。
-//
-// 独立导出是因为 MCP 的 check_release 也要用这批检查，且它自己已经查过
-// 渠道状态 —— 让它复用渠道状态、只补制品检查，比各自查一遍更省事，
-// 也保证两个入口给出同一套结论。
-func ArtifactChecks(
+// artifactChecks 是制品本身与配置的一致性检查（不联网）。
+func artifactChecks(
 	cfg config.AppConfig,
 	info artifact.Info,
 	expectLabel string,

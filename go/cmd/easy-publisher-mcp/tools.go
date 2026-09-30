@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 
 	"github.com/fangxiangCN/easy-publisher/go/internal/artifact"
@@ -29,7 +27,6 @@ func registerTools(server *mcp.Server, svc *publish.Service) {
 	registerListChannels(server)
 	registerGetMarketState(server, svc)
 	registerChecklist(server, svc)
-	registerCheckRelease(server, svc)
 	registerUploadApk(server, svc)
 	registerGetUploadStatus(server, svc)
 }
@@ -314,11 +311,8 @@ type checklistOutput struct {
 	ApplicationID string           `json:"applicationId"`
 }
 
-// checklist 是上架前的逐项检查。
-//
-// 与 check_release 的分工：check_release 面向「这次提交会不会被渠道拒绝」，
-// 逐渠道给结论；checklist 面向「这个包本身有没有低级错误」，逐项给结论，
-// 且把「查不了」也算作阻塞。上架前建议两个都跑 —— 它们是不同的失败面。
+// checklist 是上架前的逐项检查：面向「这个包本身有没有低级错误」逐项给结论，
+// 把「查不了」也算作阻塞；各渠道是否正在审核中也一并检查。
 func registerChecklist(server *mcp.Server, svc *publish.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "checklist",
@@ -370,16 +364,6 @@ func registerChecklist(server *mcp.Server, svc *publish.Service) {
 	})
 }
 
-// ---- check_release ----
-
-type checkReleaseInput struct {
-	ApplicationID    string   `json:"applicationId" jsonschema:"包名"`
-	ArtifactPath     string   `json:"artifactPath" jsonschema:"制品文件路径（.apk，鸿蒙为 .app），或存放多渠道包的目录"`
-	Channels         []string `json:"channels,omitempty" jsonschema:"只检查指定渠道；省略则检查全部已启用渠道"`
-	AllowSameVersion bool     `json:"allowSameVersion,omitempty" jsonschema:"允许版本号与线上相同"`
-	ExpectLabel      string   `json:"expectLabel,omitempty" jsonschema:"商店页展示的应用名，用于比对 APK 内的 android:label。省略则用应用配置里的 expectedLabel"`
-}
-
 // checklistItem 是一项上架前检查的结论。
 type checklistItem struct {
 	ID     string `json:"id"`
@@ -389,157 +373,12 @@ type checklistItem struct {
 	Fix    string `json:"fix,omitempty"`
 }
 
-type checkReleaseItem struct {
-	ID               string `json:"id"`
-	CanRelease       bool   `json:"canRelease"`
-	ReviewStateLabel string `json:"reviewStateLabel,omitempty"`
-	// RawStateLabel 是渠道文档里该状态值的原始描述（如「撤销上架」）。
-	// ReviewStateLabel 是粗分类，这个是渠道自己的措辞
-	RawStateLabel    string `json:"rawStateLabel,omitempty"`
-	LastVersionCode  *int64 `json:"lastVersionCode,omitempty"`
-	BlockedReason    string `json:"blockedReason,omitempty"`
-	StateQueryFailed string `json:"stateQueryFailed,omitempty"`
-}
-
-type checkReleaseOutput struct {
-	// Error 非空表示本次调用失败。结构化错误必须放在这里 ——
-	// SDK 会用输出结构体覆盖 structuredContent
-	Error    *errorPayload    `json:"error,omitempty"`
-	Artifact *artifactSummary `json:"artifact,omitempty"`
-	Warning  string           `json:"warning,omitempty"`
-	Note     string           `json:"note,omitempty"`
-	// Checks 是制品级的检查项（应用名、图标等）。
-	// 结论为「跳过」的项同样算阻塞 —— 查不了不等于没问题。
-	Checks         []checklistItem    `json:"checks,omitempty"`
-	Channels       []checkReleaseItem `json:"channels"`
-	BlockedCount   int                `json:"blockedCount"`
-	ResolvedStages map[string]string  `json:"resolvedStages"`
-}
-
 type artifactSummary struct {
 	Path          string `json:"path"`
 	ApplicationID string `json:"applicationId"`
 	VersionCode   int64  `json:"versionCode"`
 	VersionName   string `json:"versionName"`
 	SizeBytes     int64  `json:"sizeBytes"`
-}
-
-// check_release 是发布前的只读预检。
-//
-// 存在的理由：upload_apk 是不可撤销的操作，模型应当有一个**零副作用**的方式
-// 先确认「这个包发到这些渠道会不会被拒」。没有这个工具，模型只能靠真发一次来试。
-func registerCheckRelease(server *mcp.Server, svc *publish.Service) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "check_release",
-		Description: "发布预检（只读，不会提交任何东西）。解析制品、检查应用名与图标是否合规、" +
-			"查询各渠道状态，逐渠道判断是否满足发布前置条件，并说明不满足的原因。" +
-			"checks 里 status 为「不通过」或「跳过」的都算阻塞项，需先处理。" +
-			"建议在 upload_apk 之前调用。",
-		Annotations: readOnly(),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checkReleaseInput) (*mcp.CallToolResult, checkReleaseOutput, error) {
-		applicationID, err := artifact.ValidateApplicationID(in.ApplicationID)
-		if err != nil {
-			return errorResult(err, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-		}
-
-		rule := publish.VersionStrict
-		if in.AllowSameVersion {
-			rule = publish.VersionAllowSame
-		}
-
-		out := checkReleaseOutput{Channels: []checkReleaseItem{}}
-
-		st, statErr := os.Stat(in.ArtifactPath)
-		var info *artifact.Info
-		switch {
-		case statErr != nil:
-			return errorResult(eperr.LocalFileError(
-				"路径不存在：%s", in.ArtifactPath), func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-		case !st.IsDir():
-			parsed, err := artifact.Read(in.ArtifactPath)
-			if err != nil {
-				return errorResult(err, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-			}
-			info = &parsed
-			out.Artifact = &artifactSummary{
-				Path: parsed.Path, ApplicationID: parsed.ApplicationID,
-				VersionCode: parsed.VersionCode, VersionName: parsed.VersionName,
-				SizeBytes: parsed.SizeBytes,
-			}
-			if parsed.ApplicationID != applicationID {
-				out.Warning = fmt.Sprintf(
-					"制品的包名 %s 与配置的 %s 不一致", parsed.ApplicationID, applicationID)
-			}
-		default:
-			out.Note = "artifactPath 是目录，将按渠道标识匹配多渠道包，此处不逐个解析"
-		}
-
-		states, err := svc.MarketStates(ctx, applicationID, in.Channels, httpx.Default())
-		if err != nil {
-			return errorResult(err, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-		}
-		stages, err := svc.ResolvedStages(applicationID, in.Channels, nil)
-		if err != nil {
-			return errorResult(err, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-		}
-		out.ResolvedStages = map[string]string{}
-		for id, s := range stages {
-			out.ResolvedStages[id] = s.String()
-		}
-
-		// 制品级检查：应用名、图标、包名一致性。
-		// 这些检查不联网，即使渠道状态查询失败也能给出结论
-		if info != nil {
-			cfg, cfgErr := svc.App(applicationID)
-			if cfgErr != nil {
-				return errorResult(cfgErr, func(e *errorPayload) checkReleaseOutput { return checkReleaseOutput{Error: e} })
-			}
-			for _, c := range publish.ArtifactChecks(cfg, *info, in.ExpectLabel) {
-				out.Checks = append(out.Checks, checklistItem{
-					ID: c.ID, Title: c.Title, Status: c.Status.String(),
-					Detail: c.Detail, Fix: c.Fix,
-				})
-				if c.Status == publish.CheckFail || c.Status == publish.CheckSkip {
-					out.BlockedCount++
-				}
-			}
-		}
-
-		for _, ch := range channel.All() {
-			res, ok := states[ch.ID()]
-			if !ok {
-				continue
-			}
-			item := checkReleaseItem{ID: ch.ID()}
-
-			var market *channel.MarketInfo
-			if res.Err == nil {
-				market = &res.Info
-				item.ReviewStateLabel = res.Info.ReviewState.Label()
-				item.RawStateLabel = res.Info.RawStateLabel
-				if v := res.Info.LastVersion; v != nil {
-					code := v.Code
-					item.LastVersionCode = &code
-				}
-			} else {
-				// 状态查询失败不阻止预检的其余部分：
-				// 鸿蒙渠道就是有意不支持状态查询的
-				item.StateQueryFailed = res.Err.Error()
-			}
-
-			if info != nil {
-				if rejection := publish.Reject(*info, market, rule); rejection != nil {
-					item.BlockedReason = rejection.Msg
-				}
-			}
-			item.CanRelease = item.BlockedReason == "" && res.Err == nil
-			if !item.CanRelease {
-				out.BlockedCount++
-			}
-			out.Channels = append(out.Channels, item)
-		}
-		return nil, out, nil
-	})
 }
 
 // ---- upload_apk ----
@@ -595,7 +434,7 @@ func registerUploadApk(server *mcp.Server, svc *publish.Service) {
 		Description: "上传制品并向应用商店提交新版本。\n\n" +
 			"警告：此操作不可撤销 —— 各应用商店均未提供撤销版本更新的 API。\n" +
 			"提交后若要停止发布，只能登录各商店后台手动操作。\n\n" +
-			"必须显式传 confirm=true 才会执行送审。建议先调用 check_release 预检。\n" +
+			"必须显式传 confirm=true 才会执行送审。建议先调用 checklist 预检。\n" +
 			"本工具立即返回 jobId，不等待上传完成；用 get_upload_status 轮询进度。\n\n" +
 			"stopAfter 可取三个值：\n" +
 			"- artifact：仅上传安装包，不创建任何版本（用于验证凭据与文件是否被接受）\n" +
@@ -650,7 +489,7 @@ func registerUploadApk(server *mcp.Server, svc *publish.Service) {
 		if willSubmit && !in.Confirm {
 			return errorResult(eperr.ConfigurationError(
 				"送审需要显式传 confirm=true。此操作会向应用商店提交正式版本，"+
-					"且各商店均不提供撤销 API。建议先用 check_release 预检；"+
+					"且各商店均不提供撤销 API。建议先用 checklist 预检；"+
 					"若只想验证流程是否走得通，可传 stopAfter=artifact 或 draft"),
 				func(e *errorPayload) uploadOutput { return uploadOutput{Error: e} })
 		}

@@ -171,7 +171,7 @@ cd go && go build -o easy-publisher-mcp ./cmd/easy-publisher-mcp
 | `list_apps` | 只读 | 已配置的应用（只返回参数名，不返回凭据值） |
 | `list_channels` | 只读 | 渠道、所需参数、能力矩阵 |
 | `get_market_state` | 只读 | 审核状态与线上版本号 |
-| `check_release` | 只读 | 发布预检：逐渠道判断能否发版并说明原因 |
+| `checklist` | 只读 | 上架前逐项检查：制品本身的问题与渠道审核状态 |
 | `upload_apk` | **写** | 提交新版本，需显式 `confirm: true` |
 | `get_upload_status` | 只读 | 轮询任务进度 |
 
